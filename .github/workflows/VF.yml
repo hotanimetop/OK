@@ -34,40 +34,50 @@ jobs:
 
       - name: Download M3U8 by segments
         run: |
-
+      
           URL="${{ github.event.inputs.link }}"
-
+      
           echo "Getting real m3u8..."
           M3U8=$(yt-dlp -g "$URL")
-
+      
           echo "M3U8 URL: $M3U8"
-
+      
+          BASE=$(dirname "$M3U8")
+      
+          echo "Base URL: $BASE"
+      
           echo "Downloading playlist..."
           curl -L "$M3U8" -o playlist.m3u8
-
+      
           echo "Parsing segments..."
           grep -v '^#' playlist.m3u8 > segments.txt
-
+      
           TOTAL=$(wc -l < segments.txt)
-
+      
           echo "Total segments: $TOTAL"
-
+      
           mkdir -p segments
-
+      
           INDEX=0
-
+      
           while read SEG; do
-
+      
             FILE=$(printf "segments/seg_%05d.ts" $INDEX)
-
+      
             echo "=============================="
             echo "Segment $INDEX / $TOTAL"
             echo "=============================="
-
+      
+            if [[ "$SEG" == http* ]]; then
+              FULL="$SEG"
+            else
+              FULL="$BASE/$SEG"
+            fi
+      
             while true; do
-
-              echo "Downloading segment..."
-
+      
+              echo "Downloading $FULL"
+      
               aria2c \
                 --quiet=true \
                 --allow-overwrite=true \
@@ -76,56 +86,56 @@ jobs:
                 --connect-timeout=30 \
                 --timeout=300 \
                 -o "$FILE.tmp" \
-                "$SEG"
-
+                "$FULL"
+      
               if [ ! -f "$FILE.tmp" ]; then
                 echo "Download failed → wait 60s"
                 sleep 60
                 continue
               fi
-
+      
               SIZE=$(stat -c%s "$FILE.tmp")
-
+      
               if [ "$SIZE" -lt 50000 ]; then
                 echo "Segment too small → retry in 60s"
                 rm -f "$FILE.tmp"
                 sleep 60
                 continue
               fi
-
+      
               ffprobe -v error "$FILE.tmp" >/dev/null 2>&1
-
+      
               if [ $? -ne 0 ]; then
                 echo "Segment corrupt → retry in 60s"
                 rm -f "$FILE.tmp"
                 sleep 60
                 continue
               fi
-
+      
               mv "$FILE.tmp" "$FILE"
-
+      
               echo "Segment OK"
-
+      
               break
-
+      
             done
-
+      
             INDEX=$((INDEX+1))
-
+      
           done < segments.txt
-
-
+      
+      
           echo "Creating concat list..."
-
+      
           rm -f list.txt
-
+      
           for f in segments/*.ts; do
             echo "file '$f'" >> list.txt
           done
-
-
+      
+      
           echo "Merging segments..."
-
+      
           ffmpeg \
             -loglevel error \
             -f concat \
@@ -133,16 +143,16 @@ jobs:
             -i list.txt \
             -c copy \
             input_video.mp4
-
-
+      
+      
           echo "Verifying video..."
-
+      
           ffmpeg -v error -i input_video.mp4 -f null - || {
             echo "Video decode error"
             exit 1
           }
-
-          echo "Video download completed successfully"
+      
+          echo "Video completed successfully"
           
       - name: Re-Encode & Convert to HLS fMP4 (Strict 5.00s Segments as PNG)
         run: |
