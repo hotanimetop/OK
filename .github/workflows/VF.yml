@@ -83,7 +83,7 @@ jobs:
                 FULL="$FULL?v=$RAND"
               fi
       
-              aria2c \
+              /usr/bin/aria2c \
                 --quiet=true \
                 --allow-overwrite=true \
                 --file-allocation=none \
@@ -92,7 +92,7 @@ jobs:
                 "$FULL" || true
       
               if [ ! -f "$FILE.tmp" ]; then
-                sleep 60
+                /bin/sleep 60
                 ATTEMPT=$((ATTEMPT+1))
                 continue
               fi
