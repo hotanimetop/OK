@@ -31,7 +31,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg aria2 curl jq
           python3 -m pip install -U yt-dlp
-
+          
       - name: Download + Verify M3U8 Video
         run: |
           URL="${{ github.event.inputs.link }}"
@@ -52,13 +52,12 @@ jobs:
       
           mkdir -p segments
       
-          INDEX=0
-          LAST_LOG=$(date +%s)
+          mapfile -t SEGS < segments.txt
       
           download_segment () {
       
-            SEG="$1"
-            IDX="$2"
+            IDX=$1
+            SEG="${SEGS[$IDX]}"
       
             FILE=$(printf "segments/seg_%05d.ts" $IDX)
       
@@ -80,13 +79,6 @@ jobs:
                 -o "$FILE.tmp" \
                 "$FULL" || true
       
-              NOW=$(date +%s)
-      
-              if (( NOW - LAST_LOG >= 30 )); then
-                echo "Downloading... segment $IDX"
-                LAST_LOG=$NOW
-              fi
-      
               if [ ! -f "$FILE.tmp" ]; then
                 sleep 60
                 continue
@@ -107,45 +99,62 @@ jobs:
               }
       
               mv "$FILE.tmp" "$FILE"
-      
-              echo "Segment $IDX OK"
-      
               break
             done
           }
       
-          echo "Downloading segments..."
       
-          while read SEG; do
-            download_segment "$SEG" "$INDEX"
-            INDEX=$((INDEX+1))
-          done < segments.txt
+          echo "Starting parallel download (10 segments)..."
       
+          for ((i=0;i<TOTAL;i++)); do
       
-          merge_video () {
+            download_segment $i &
       
-            echo "Creating concat list..."
-      
-            rm -f list.txt
-      
-            for f in segments/*.ts; do
-              echo "file '$f'" >> list.txt
+            while [ "$(jobs -r | wc -l)" -ge 10 ]; do
+              sleep 1
             done
       
-            echo "Merging segments..."
-      
-            ffmpeg -loglevel error \
-              -f concat \
-              -safe 0 \
-              -i list.txt \
-              -c copy \
-              input_video.mp4
-          }
-      
-          merge_video
+          done
       
       
-          echo "Checking expected duration..."
+          (
+            while true; do
+              DONE=$(ls segments | wc -l)
+              echo "Downloading... $DONE / $TOTAL segments"
+              sleep 30
+            done
+          ) &
+      
+          LOGGER=$!
+      
+          wait
+      
+          kill $LOGGER || true
+      
+      
+          echo "All segments downloaded"
+      
+      
+          echo "Creating concat list..."
+      
+          rm -f list.txt
+      
+          for f in segments/*.ts; do
+            echo "file '$f'" >> list.txt
+          done
+      
+      
+          echo "Merging video..."
+      
+          ffmpeg -loglevel error \
+            -f concat \
+            -safe 0 \
+            -i list.txt \
+            -c copy \
+            input_video.mp4
+      
+      
+          echo "Checking duration..."
       
           EXPECTED=$(grep "#EXTINF" playlist.m3u8 | awk -F: '{sum+=$2} END{print int(sum)}')
       
@@ -161,7 +170,7 @@ jobs:
       
           DIFF=$(echo "$EXPECTED $ACTUAL" | awk '{print ($1>$2)?$1-$2:$2-$1}')
       
-          echo "Duration difference: $DIFF"
+          echo "Duration difference: $DIFF seconds"
       
       
           echo "Checking decode errors..."
@@ -176,46 +185,52 @@ jobs:
             exit 0
           fi
       
-      
-          echo "Video has errors → checking segments individually..."
-      
-          INDEX=0
-      
-          while read SEG; do
-      
-            FILE=$(printf "segments/seg_%05d.ts" $INDEX)
-      
-            ffmpeg -v error -i "$FILE" -f null - 2>/dev/null
-      
-            if [ $? -ne 0 ]; then
-      
-              echo "Segment $INDEX corrupted → redownloading"
-      
-              rm -f "$FILE"
-      
-              download_segment "$SEG" "$INDEX"
-      
-            fi
-      
-            INDEX=$((INDEX+1))
-      
-          done < segments.txt
-      
-      
-          echo "Re-merging video after fixing segments..."
-      
-          merge_video
-      
-      
-          echo "Final verification..."
-      
-          ffmpeg -v error -i input_video.mp4 -f null - || {
-            echo "Video still has errors"
-            exit 1
-          }
-      
-          echo "Video completed successfully"
+          echo "Video verification failed"
+          exit 1
+
+          echo "Collecting video information..."
+
+          SIZE=$(du -h input_video.mp4 | cut -f1)
           
+          DURATION=$(ffprobe -v error \
+            -show_entries format=duration \
+            -of default=noprint_wrappers=1:nokey=1 \
+            input_video.mp4)
+          
+          BITRATE=$(ffprobe -v error \
+            -show_entries format=bit_rate \
+            -of default=noprint_wrappers=1:nokey=1 \
+            input_video.mp4)
+          
+          WIDTH=$(ffprobe -v error \
+            -select_streams v:0 \
+            -show_entries stream=width \
+            -of csv=p=0 input_video.mp4)
+          
+          HEIGHT=$(ffprobe -v error \
+            -select_streams v:0 \
+            -show_entries stream=height \
+            -of csv=p=0 input_video.mp4)
+          
+          FPS=$(ffprobe -v error \
+            -select_streams v:0 \
+            -show_entries stream=r_frame_rate \
+            -of csv=p=0 input_video.mp4)
+          
+          CODEC=$(ffprobe -v error \
+            -select_streams v:0 \
+            -show_entries stream=codec_name \
+            -of csv=p=0 input_video.mp4)
+          
+          echo "================ VIDEO INFO ================"
+          echo "File: input_video.mp4"
+          echo "Size: $SIZE"
+          echo "Duration: $DURATION seconds"
+          echo "Resolution: ${WIDTH}x${HEIGHT}"
+          echo "FPS: $FPS"
+          echo "Codec: $CODEC"
+          echo "Bitrate: $BITRATE"
+          echo "==========================================="
       - name: Re-Encode & Convert to HLS fMP4 (Strict 5.00s Segments as PNG)
         run: |
           mkdir -p output
