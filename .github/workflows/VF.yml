@@ -36,40 +36,52 @@ jobs:
         run: |
           URL="${{ github.event.inputs.link }}"
       
-          echo "Getting real m3u8..."
-          M3U8=$(yt-dlp -g "$URL")
+          DOMAINS=(
+            "thunderleaf12.online"
+            "aurorabird6.live"
+            "rainorbit33.xyz"
+            "frostcomet5.pro"
+            "nightbreeze17.site"
+          )
       
           PREFIX="https://limit.fatherlessdad.workers.dev"
+      
+          echo "Getting real m3u8..."
+          M3U8=$(yt-dlp -g "$URL")
       
           echo "Downloading playlist..."
           curl -sL "$M3U8" -o playlist.m3u8
       
           grep -v '^#' playlist.m3u8 > segments.txt
-      
           TOTAL=$(wc -l < segments.txt)
       
           echo "Total segments: $TOTAL"
       
           mkdir -p segments
-      
           mapfile -t SEGS < segments.txt
       
-          download_segment () {
+      
+          download_segment() {
       
             IDX=$1
             SEG="${SEGS[$IDX]}"
       
             FILE=$(printf "segments/seg_%05d.ts" $IDX)
       
-            if [[ "$SEG" == http* ]]; then
-              FULL="$SEG"
-            elif [[ "$SEG" == /* ]]; then
-              FULL="$PREFIX$SEG"
-            else
-              FULL="$SEG"
-            fi
+            ATTEMPT=0
       
             while true; do
+      
+              DOMAIN=${DOMAINS[$((ATTEMPT % ${#DOMAINS[@]}))]}
+      
+              PATH=$(echo "$SEG" | sed -E 's|^/?[^/]+/|/|')
+      
+              FULL="$PREFIX/$DOMAIN$PATH"
+      
+              if (( ATTEMPT >= 5 )); then
+                RAND=$RANDOM
+                FULL="$FULL?v=$RAND"
+              fi
       
               aria2c \
                 --quiet=true \
@@ -81,6 +93,7 @@ jobs:
       
               if [ ! -f "$FILE.tmp" ]; then
                 sleep 60
+                ATTEMPT=$((ATTEMPT+1))
                 continue
               fi
       
@@ -89,17 +102,20 @@ jobs:
               if [ "$SIZE" -lt 50000 ]; then
                 rm -f "$FILE.tmp"
                 sleep 60
+                ATTEMPT=$((ATTEMPT+1))
                 continue
               fi
       
               ffprobe -v error "$FILE.tmp" >/dev/null 2>&1 || {
                 rm -f "$FILE.tmp"
                 sleep 60
+                ATTEMPT=$((ATTEMPT+1))
                 continue
               }
       
               mv "$FILE.tmp" "$FILE"
               break
+      
             done
           }
       
@@ -131,12 +147,10 @@ jobs:
       
           kill $LOGGER || true
       
-      
           echo "All segments downloaded"
       
       
           echo "Creating concat list..."
-      
           rm -f list.txt
       
           for f in segments/*.ts; do
@@ -153,6 +167,7 @@ jobs:
             -c copy \
             input_video.mp4
       
+            
       
           echo "Checking duration..."
       
