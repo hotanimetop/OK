@@ -1,0 +1,220 @@
+name: M3U8 Download
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'Link'
+        required: true
+      slug:
+        description: 'Slug'
+        required: true
+      token:
+        description: 'Token'
+        required: true
+      page:
+        description: 'Pages'
+        required: true
+      account:
+        description: 'Account'
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python3 -m pip install -U yt-dlp
+
+      - name: Get Duration From m3u8
+        id: duration
+        run: |
+          URL="${{ github.event.inputs.link }}"
+          
+          echo "Getting duration from m3u8..."
+          META=$(yt-dlp --dump-json "$URL")
+          
+          EXPECTED=$(echo "$META" | jq '.duration')
+          
+          echo "Expected duration: $EXPECTED seconds"
+          echo "expected=$EXPECTED" >> $GITHUB_OUTPUT
+      
+      - name: Download + Verify + Duration Check (Retry 5 times)
+        run: |
+          URL="${{ github.event.inputs.link }}"
+          EXPECTED=${{ steps.duration.outputs.expected }}
+
+          MAX_RETRY=5
+          COUNT=1
+
+          while [ $COUNT -le $MAX_RETRY ]; do
+            echo "=============================="
+            echo "Attempt $COUNT / $MAX_RETRY"
+            echo "=============================="
+
+            rm -f input_video.mp4
+
+            echo "Downloading..."
+            
+            # Khắc phục lỗi thụt lề bằng textwrap.dedent, log lỗi/retry hiển thị ngay, log % tải hiện mỗi 30s
+            export PYTHONUNBUFFERED=1
+            yt-dlp \
+            --newline \
+            --concurrent-fragments 1 \
+            --retries infinite \
+            --fragment-retries 100 \
+            --skip-unavailable-fragments \
+            --retry-sleep fragment:60 \
+            -o "input_video.mp4" \
+            "$URL" 2>&1 | python3 -c 'import sys, time, textwrap; exec(textwrap.dedent("""
+            import sys, time
+            last = 0
+            for line in sys.stdin:
+                if "Got error" in line or "Retrying" in line:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                elif line.startswith("[download]") and "%" in line:
+                    now = time.time()
+                    if now - last >= 30 or "100%" in line:
+                        sys.stdout.write(line)
+                        sys.stdout.flush()
+                        last = now
+                else:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+            """))'
+
+            if [ ! -f "input_video.mp4" ]; then
+              echo "Download failed."
+              COUNT=$((COUNT+1))
+              continue
+            fi
+
+            echo "Getting duration from file..."
+            ACTUAL=$(ffprobe -v error \
+              -show_entries format=duration \
+              -of default=noprint_wrappers=1:nokey=1 \
+              input_video.mp4)
+
+            ACTUAL=${ACTUAL%.*}
+
+            echo "Expected: $EXPECTED"
+            echo "Actual: $ACTUAL"
+
+            DIFF=$(echo "$EXPECTED $ACTUAL" | awk '{print ($1>$2)?$1-$2:$2-$1}')
+
+            echo "Difference: $DIFF seconds"
+
+            if [ "$DIFF" -le 3 ]; then
+              echo "Duration OK"
+              break
+            fi
+
+            echo "Duration mismatch → retry download"
+            COUNT=$((COUNT+1))
+          done
+
+          if [ ! -f "input_video.mp4" ] || [ "$DIFF" -gt 3 ]; then
+            echo "Failed after $MAX_RETRY attempts"
+            exit 1
+          fi
+          
+      - name: Re-Encode & Convert to HLS fMP4 (Strict 5.00s Segments as PNG)
+        run: |
+          mkdir -p output
+          
+          # Cập nhật Encode:
+          # -r 30 : Ép cố định 30 hình/giây
+          # -g 150 -keyint_min 150 : Buộc tạo Keyframe mỗi 150 hình (Chính xác 5 giây sẽ có 1 điểm cắt)
+          # -ar 48000 : Ép audio sample rate để cắt file không bị lệch nhịp
+          
+          ffmpeg -y -stats_period 30 -i input_video.mp4 \
+            -map 0:v:0 -map 0:a? \
+            -c:v libx264 -pix_fmt yuv420p -profile:v high -level 4.1 -crf 21 -preset medium \
+            -maxrate 2500k -bufsize 3500k \
+            -r 30 -g 150 -keyint_min 150 -sc_threshold 0 \
+            -c:a aac -b:a 96k -ac 2 -ar 48000 -threads 0 \
+            -f hls \
+            -start_number 10001 \
+            -hls_time 5 \
+            -hls_list_size 0 \
+            -hls_segment_type fmp4 \
+            -hls_fmp4_init_filename "${{ github.event.inputs.slug }}-index.png" \
+            -hls_segment_filename "output/${{ github.event.inputs.slug }}-index%d.png" \
+            "output/${{ github.event.inputs.slug }}.m3u8"
+          
+          # Kiểm tra xem file m3u8 có được tạo không
+          if [ ! -f "output/${{ github.event.inputs.slug }}.m3u8" ]; then
+            echo "FFmpeg failed to create m3u8"
+            exit 1
+          fi
+
+      - name: Deploy to Cloudflare Pages (first)
+        id: deploy1
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.account }}
+          projectName: ${{ github.event.inputs.page }}
+          directory: ./output
+          branch: ${{ github.event.inputs.slug }}
+
+      - name: Verify Cloudflare deployment (branch domain check)
+        id: verify
+        continue-on-error: true
+        env:
+          PROJECT: ${{ github.event.inputs.page }}
+          BRANCH: ${{ github.event.inputs.slug }}
+        run: |
+          set -e
+          FILE_URL="https://${{ github.event.inputs.slug }}.${{ github.event.inputs.page }}.pages.dev/${{ github.event.inputs.slug }}.m3u8"
+
+          echo "[TARGET] $FILE_URL"
+
+          check () {
+            code=$(curl -L -o /dev/null -s -w "%{http_code}" "$FILE_URL")
+            echo "HTTP CODE: $code"
+            [ "$code" = "200" ]
+          }
+
+          echo "[WAIT] Waiting 1 minutes for Pages propagation..."
+          sleep 60
+
+          echo "[CHECK #1]"
+          if check; then
+            echo "[SUCCESS] File exists"
+            curl -G "https://cp.ssplay.net/vicdn.php" \
+            --data-urlencode "type=ok0" \
+            --data-urlencode "key=${{ github.event.inputs.page }}" \
+            --data-urlencode "slug=${{ github.event.inputs.slug }}"
+            exit 0
+          fi
+
+          echo "[WAIT] Still not found, wait extra 3 minutes..."
+          sleep 180
+
+          echo "[CHECK #2]"
+          if check; then
+            echo "[SUCCESS] File exists after delay"
+            exit 0
+          fi
+
+          echo "[FAIL] File still missing → mark for redeploy"
+          echo "NEED_REDEPLOY=true" >> $GITHUB_ENV
+          exit 1
+
+      - name: Deploy to Cloudflare Pages (retry – reuse encoded files)
+        if: env.NEED_REDEPLOY == 'true'
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.account }}
+          projectName: ${{ github.event.inputs.page }}
+          directory: ./output
+          branch: ${{ github.event.inputs.slug }}
