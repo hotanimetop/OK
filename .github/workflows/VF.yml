@@ -71,7 +71,7 @@ jobs:
             if [[ "$SEG" == http* ]]; then
               FULL="$SEG"
             else
-              FULL="$BASE/$SEG"
+              FULL="https://limit.fatherlessdad.workers.dev$SEG"
             fi
       
             while true; do
