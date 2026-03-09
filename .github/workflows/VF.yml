@@ -102,14 +102,6 @@ jobs:
                 continue
               fi
 
-              SIZE=$(wc -c < "$FILE.tmp")
-
-              if [ "$SIZE" -lt 50000 ]; then
-                rm -f "$FILE.tmp"
-                sleep 10
-                ATTEMPT=$((ATTEMPT+1))
-                continue
-              fi
 
               ffprobe -v error "$FILE.tmp" >/dev/null 2>&1 || {
                 rm -f "$FILE.tmp"
