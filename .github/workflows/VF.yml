@@ -22,6 +22,7 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -31,11 +32,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg aria2 curl jq
           python3 -m pip install -U yt-dlp
-          
+
       - name: Download + Verify M3U8 Video
+        shell: bash
         run: |
+
+          set -e
+
           URL="${{ github.event.inputs.link }}"
-      
+
           DOMAINS=(
             "thunderleaf12.online"
             "aurorabird6.live"
@@ -43,46 +48,46 @@ jobs:
             "frostcomet5.pro"
             "nightbreeze17.site"
           )
-      
+
           PREFIX="https://limit.fatherlessdad.workers.dev"
-      
+
           echo "Getting real m3u8..."
           M3U8=$(yt-dlp -g "$URL")
-      
+
           echo "Downloading playlist..."
           curl -sL "$M3U8" -o playlist.m3u8
-      
+
           grep -v '^#' playlist.m3u8 > segments.txt
           TOTAL=$(wc -l < segments.txt)
-      
+
           echo "Total segments: $TOTAL"
-      
+
           mkdir -p segments
+
           mapfile -t SEGS < segments.txt
-      
-      
+
           download_segment() {
-      
+
             IDX=$1
             SEG="${SEGS[$IDX]}"
-      
-            FILE=$(printf "segments/seg_%05d.ts" $IDX)
-      
+
+            FILE=$(printf "segments/seg_%05d.ts" "$IDX")
+
             ATTEMPT=0
-      
+
             while true; do
-      
+
               DOMAIN=${DOMAINS[$((ATTEMPT % ${#DOMAINS[@]}))]}
-      
-              PATH=$(echo "$SEG" | sed -E 's|^/?[^/]+/|/|')
-      
-              FULL="$PREFIX/$DOMAIN$PATH"
-      
+
+              SEG_PATH=$(echo "$SEG" | sed -E 's|^/?[^/]+/|/|')
+
+              FULL="$PREFIX/$DOMAIN$SEG_PATH"
+
               if (( ATTEMPT >= 5 )); then
                 RAND=$RANDOM
                 FULL="$FULL?v=$RAND"
               fi
-      
+
               /usr/bin/aria2c \
                 --quiet=true \
                 --allow-overwrite=true \
@@ -90,153 +95,145 @@ jobs:
                 --max-tries=1 \
                 -o "$FILE.tmp" \
                 "$FULL" || true
-      
+
               if [ ! -f "$FILE.tmp" ]; then
-                /bin/sleep 60
+                sleep 10
                 ATTEMPT=$((ATTEMPT+1))
                 continue
               fi
-      
-              SIZE=$(stat -c%s "$FILE.tmp")
-      
+
+              SIZE=$(wc -c < "$FILE.tmp")
+
               if [ "$SIZE" -lt 50000 ]; then
                 rm -f "$FILE.tmp"
-                sleep 60
+                sleep 10
                 ATTEMPT=$((ATTEMPT+1))
                 continue
               fi
-      
+
               ffprobe -v error "$FILE.tmp" >/dev/null 2>&1 || {
                 rm -f "$FILE.tmp"
-                sleep 60
+                sleep 10
                 ATTEMPT=$((ATTEMPT+1))
                 continue
               }
-      
+
               mv "$FILE.tmp" "$FILE"
               break
-      
+
             done
           }
-      
-      
-          echo "Starting parallel download (10 segments)..."
-      
+
+          echo "Starting parallel download..."
+
           for ((i=0;i<TOTAL;i++)); do
-      
-            download_segment $i &
-      
-            while [ "$(jobs -r | wc -l)" -ge 10 ]; do
+
+            download_segment "$i" &
+
+            while [ "$(jobs | wc -l)" -ge 10 ]; do
               sleep 1
             done
-      
+
           done
-      
-      
+
           (
             while true; do
-              DONE=$(ls segments | wc -l)
+              DONE=$(ls segments 2>/dev/null | wc -l)
               echo "Downloading... $DONE / $TOTAL segments"
               sleep 30
             done
           ) &
-      
+
           LOGGER=$!
-      
+
           wait
-      
+
           kill $LOGGER || true
-      
+
           echo "All segments downloaded"
-      
-      
+
           echo "Creating concat list..."
+
           rm -f list.txt
-      
+
           for f in segments/*.ts; do
             echo "file '$f'" >> list.txt
           done
-      
-      
+
           echo "Merging video..."
-      
+
           ffmpeg -loglevel error \
             -f concat \
             -safe 0 \
             -i list.txt \
             -c copy \
             input_video.mp4
-      
-            
-      
+
           echo "Checking duration..."
-      
+
           EXPECTED=$(grep "#EXTINF" playlist.m3u8 | awk -F: '{sum+=$2} END{print int(sum)}')
-      
+
           ACTUAL=$(ffprobe -v error \
             -show_entries format=duration \
             -of default=noprint_wrappers=1:nokey=1 \
             input_video.mp4)
-      
+
           ACTUAL=${ACTUAL%.*}
-      
+
           echo "Expected: $EXPECTED"
           echo "Actual: $ACTUAL"
-      
+
           DIFF=$(echo "$EXPECTED $ACTUAL" | awk '{print ($1>$2)?$1-$2:$2-$1}')
-      
+
           echo "Duration difference: $DIFF seconds"
-      
-      
+
           echo "Checking decode errors..."
-      
+
           ERRORS=$(ffmpeg -v error -i input_video.mp4 -f null - 2>&1 | wc -l)
-      
+
           echo "Decode errors: $ERRORS"
-      
-      
-          if [ "$DIFF" -le 5 ] && [ "$ERRORS" -eq 0 ]; then
-            echo "Video verified successfully"
-            exit 0
+
+          if [ "$DIFF" -gt 5 ] || [ "$ERRORS" -ne 0 ]; then
+            echo "Video verification failed"
+            exit 1
           fi
-      
-          echo "Video verification failed"
-          exit 1
+
+          echo "Video verified successfully"
 
           echo "Collecting video information..."
 
           SIZE=$(du -h input_video.mp4 | cut -f1)
-          
+
           DURATION=$(ffprobe -v error \
             -show_entries format=duration \
             -of default=noprint_wrappers=1:nokey=1 \
             input_video.mp4)
-          
+
           BITRATE=$(ffprobe -v error \
             -show_entries format=bit_rate \
             -of default=noprint_wrappers=1:nokey=1 \
             input_video.mp4)
-          
+
           WIDTH=$(ffprobe -v error \
             -select_streams v:0 \
             -show_entries stream=width \
             -of csv=p=0 input_video.mp4)
-          
+
           HEIGHT=$(ffprobe -v error \
             -select_streams v:0 \
             -show_entries stream=height \
             -of csv=p=0 input_video.mp4)
-          
+
           FPS=$(ffprobe -v error \
             -select_streams v:0 \
             -show_entries stream=r_frame_rate \
             -of csv=p=0 input_video.mp4)
-          
+
           CODEC=$(ffprobe -v error \
             -select_streams v:0 \
             -show_entries stream=codec_name \
             -of csv=p=0 input_video.mp4)
-          
+
           echo "================ VIDEO INFO ================"
           echo "File: input_video.mp4"
           echo "Size: $SIZE"
@@ -246,6 +243,7 @@ jobs:
           echo "Codec: $CODEC"
           echo "Bitrate: $BITRATE"
           echo "==========================================="
+          
       - name: Re-Encode & Convert to HLS fMP4 (Strict 5.00s Segments as PNG)
         run: |
           mkdir -p output
