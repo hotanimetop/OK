@@ -32,24 +32,18 @@ jobs:
           sudo apt-get install -y ffmpeg aria2 curl jq
           python3 -m pip install -U yt-dlp
 
-      - name: Download M3U8 by segments
+      - name: Download + Verify M3U8 Video
         run: |
-      
           URL="${{ github.event.inputs.link }}"
       
           echo "Getting real m3u8..."
           M3U8=$(yt-dlp -g "$URL")
       
-          echo "M3U8 URL: $M3U8"
-      
-          BASE=$(dirname "$M3U8")
-      
-          echo "Base URL: $BASE"
+          PREFIX="https://limit.fatherlessdad.workers.dev"
       
           echo "Downloading playlist..."
-          curl -L "$M3U8" -o playlist.m3u8
+          curl -sL "$M3U8" -o playlist.m3u8
       
-          echo "Parsing segments..."
           grep -v '^#' playlist.m3u8 > segments.txt
       
           TOTAL=$(wc -l < segments.txt)
@@ -59,37 +53,41 @@ jobs:
           mkdir -p segments
       
           INDEX=0
+          LAST_LOG=$(date +%s)
       
-          while read SEG; do
+          download_segment () {
       
-            FILE=$(printf "segments/seg_%05d.ts" $INDEX)
+            SEG="$1"
+            IDX="$2"
       
-            echo "=============================="
-            echo "Segment $INDEX / $TOTAL"
-            echo "=============================="
+            FILE=$(printf "segments/seg_%05d.ts" $IDX)
       
             if [[ "$SEG" == http* ]]; then
               FULL="$SEG"
+            elif [[ "$SEG" == /* ]]; then
+              FULL="$PREFIX$SEG"
             else
-              FULL="https://limit.fatherlessdad.workers.dev$SEG"
+              FULL="$SEG"
             fi
       
             while true; do
-      
-              echo "Downloading $FULL"
       
               aria2c \
                 --quiet=true \
                 --allow-overwrite=true \
                 --file-allocation=none \
                 --max-tries=1 \
-                --connect-timeout=30 \
-                --timeout=300 \
                 -o "$FILE.tmp" \
-                "$FULL"
+                "$FULL" || true
+      
+              NOW=$(date +%s)
+      
+              if (( NOW - LAST_LOG >= 30 )); then
+                echo "Downloading... segment $IDX"
+                LAST_LOG=$NOW
+              fi
       
               if [ ! -f "$FILE.tmp" ]; then
-                echo "Download failed → wait 60s"
                 sleep 60
                 continue
               fi
@@ -97,58 +95,122 @@ jobs:
               SIZE=$(stat -c%s "$FILE.tmp")
       
               if [ "$SIZE" -lt 50000 ]; then
-                echo "Segment too small → retry in 60s"
                 rm -f "$FILE.tmp"
                 sleep 60
                 continue
               fi
       
-              ffprobe -v error "$FILE.tmp" >/dev/null 2>&1
-      
-              if [ $? -ne 0 ]; then
-                echo "Segment corrupt → retry in 60s"
+              ffprobe -v error "$FILE.tmp" >/dev/null 2>&1 || {
                 rm -f "$FILE.tmp"
                 sleep 60
                 continue
-              fi
+              }
       
               mv "$FILE.tmp" "$FILE"
       
-              echo "Segment OK"
+              echo "Segment $IDX OK"
       
               break
-      
             done
+          }
+      
+          echo "Downloading segments..."
+      
+          while read SEG; do
+            download_segment "$SEG" "$INDEX"
+            INDEX=$((INDEX+1))
+          done < segments.txt
+      
+      
+          merge_video () {
+      
+            echo "Creating concat list..."
+      
+            rm -f list.txt
+      
+            for f in segments/*.ts; do
+              echo "file '$f'" >> list.txt
+            done
+      
+            echo "Merging segments..."
+      
+            ffmpeg -loglevel error \
+              -f concat \
+              -safe 0 \
+              -i list.txt \
+              -c copy \
+              input_video.mp4
+          }
+      
+          merge_video
+      
+      
+          echo "Checking expected duration..."
+      
+          EXPECTED=$(grep "#EXTINF" playlist.m3u8 | awk -F: '{sum+=$2} END{print int(sum)}')
+      
+          ACTUAL=$(ffprobe -v error \
+            -show_entries format=duration \
+            -of default=noprint_wrappers=1:nokey=1 \
+            input_video.mp4)
+      
+          ACTUAL=${ACTUAL%.*}
+      
+          echo "Expected: $EXPECTED"
+          echo "Actual: $ACTUAL"
+      
+          DIFF=$(echo "$EXPECTED $ACTUAL" | awk '{print ($1>$2)?$1-$2:$2-$1}')
+      
+          echo "Duration difference: $DIFF"
+      
+      
+          echo "Checking decode errors..."
+      
+          ERRORS=$(ffmpeg -v error -i input_video.mp4 -f null - 2>&1 | wc -l)
+      
+          echo "Decode errors: $ERRORS"
+      
+      
+          if [ "$DIFF" -le 5 ] && [ "$ERRORS" -eq 0 ]; then
+            echo "Video verified successfully"
+            exit 0
+          fi
+      
+      
+          echo "Video has errors → checking segments individually..."
+      
+          INDEX=0
+      
+          while read SEG; do
+      
+            FILE=$(printf "segments/seg_%05d.ts" $INDEX)
+      
+            ffmpeg -v error -i "$FILE" -f null - 2>/dev/null
+      
+            if [ $? -ne 0 ]; then
+      
+              echo "Segment $INDEX corrupted → redownloading"
+      
+              rm -f "$FILE"
+      
+              download_segment "$SEG" "$INDEX"
+      
+            fi
       
             INDEX=$((INDEX+1))
       
           done < segments.txt
       
       
-          echo "Creating concat list..."
+          echo "Re-merging video after fixing segments..."
       
-          rm -f list.txt
-      
-          for f in segments/*.ts; do
-            echo "file '$f'" >> list.txt
-          done
+          merge_video
       
       
-          echo "Merging segments..."
-      
-          ffmpeg \
-            -loglevel error \
-            -f concat \
-            -safe 0 \
-            -i list.txt \
-            -c copy \
-            input_video.mp4
-      
-      
-          echo "Verifying video..."
+          echo "Final verification..."
       
           ffmpeg -v error -i input_video.mp4 -f null - || {
-            echo "Video decode error"
+            echo "Video still has errors"
             exit 1
           }
       
