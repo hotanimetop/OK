@@ -67,20 +67,16 @@ jobs:
           mapfile -t SEGS < segments.txt
 
           download_segment() {
-
             IDX=$1
             SEG="${SEGS[$IDX]}"
-
             FILE=$(printf "segments/seg_%05d.ts" "$IDX")
-
+            
             ATTEMPT=0
+            MAX_RETRIES=30 # Giới hạn tối đa 30 lần thử (Tránh treo vô hạn)
 
-            while true; do
-
+            while [ "$ATTEMPT" -lt "$MAX_RETRIES" ]; do
               DOMAIN=${DOMAINS[$((ATTEMPT % ${#DOMAINS[@]}))]}
-
               SEG_PATH=$(echo "$SEG" | sed -E 's|^/?[^/]+/|/|')
-
               FULL="$PREFIX/$DOMAIN$SEG_PATH"
 
               if (( ATTEMPT >= 5 )); then
@@ -97,50 +93,52 @@ jobs:
                 "$FULL" || true
 
               if [ ! -f "$FILE.tmp" ]; then
-                sleep 10
+                sleep 5
                 ATTEMPT=$((ATTEMPT+1))
                 continue
               fi
 
-
               ffprobe -v error "$FILE.tmp" >/dev/null 2>&1 || {
                 rm -f "$FILE.tmp"
-                sleep 10
+                sleep 5
                 ATTEMPT=$((ATTEMPT+1))
                 continue
               }
 
+              # Đổi tên khi thành công
               mv "$FILE.tmp" "$FILE"
-              break
-
+              return 0
             done
+            
+            echo "LỖI KHI TẢI SEGMENT: $IDX. Đã thử $MAX_RETRIES lần thất bại!"
+            exit 1
           }
 
           echo "Starting parallel download..."
 
           for ((i=0;i<TOTAL;i++)); do
-
             download_segment "$i" &
 
-            while [ "$(jobs | wc -l)" -ge 10 ]; do
+            while [ "$(jobs -p | wc -l)" -ge 10 ]; do
               sleep 1
             done
-
           done
 
-          (
-            while true; do
-              DONE=$(ls segments 2>/dev/null | wc -l)
-              echo "Downloading... $DONE / $TOTAL segments"
-              sleep 30
-            done
-          ) &
+          # VÒNG LẶP CHỜ VÀ HIỂN THỊ LOG (Thay thế Logger cũ)
+          DONE=0
+          while [ "$DONE" -lt "$TOTAL" ]; do
+            # Bắt buộc chỉ đếm file .ts (bỏ qua các file .tmp đang tải dở)
+            DONE=$(find segments -maxdepth 1 -name "*.ts" 2>/dev/null | wc -l || echo 0)
+            echo "Downloading... $DONE / $TOTAL segments"
+            
+            if [ "$DONE" -eq "$TOTAL" ]; then
+              break
+            fi
+            sleep 15
+          done
 
-          LOGGER=$!
-
+          # Đảm bảo dọn dẹp các background jobs cuối cùng
           wait
-
-          kill $LOGGER || true
 
           echo "All segments downloaded"
 
