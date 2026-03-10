@@ -63,7 +63,6 @@ jobs:
           echo "Total segments: $TOTAL"
 
           mkdir -p segments
-
           mapfile -t SEGS < segments.txt
 
           download_segment() {
@@ -72,9 +71,9 @@ jobs:
             FILE=$(printf "segments/seg_%05d.ts" "$IDX")
             
             ATTEMPT=0
-            MAX_RETRIES=30 # Giới hạn tối đa 30 lần thử (Tránh treo vô hạn)
+            MAX_RETRIES=20 # Giới hạn thử lại 20 lần
 
-            while [ "$ATTEMPT" -lt "$MAX_RETRIES" ]; do
+            while[ "$ATTEMPT" -lt "$MAX_RETRIES" ]; do
               DOMAIN=${DOMAINS[$((ATTEMPT % ${#DOMAINS[@]}))]}
               SEG_PATH=$(echo "$SEG" | sed -E 's|^/?[^/]+/|/|')
               FULL="$PREFIX/$DOMAIN$SEG_PATH"
@@ -92,9 +91,11 @@ jobs:
                 -o "$FILE.tmp" \
                 "$FULL" || true
 
-              if [ ! -f "$FILE.tmp" ]; then
+              if[ ! -f "$FILE.tmp" ]; then
                 sleep 5
                 ATTEMPT=$((ATTEMPT+1))
+                # Báo log đang lỗi/đang thử lại
+                echo "[!] Segment $IDX tải lỗi mạng (Thử lại $ATTEMPT/$MAX_RETRIES)..."
                 continue
               fi
 
@@ -102,16 +103,28 @@ jobs:
                 rm -f "$FILE.tmp"
                 sleep 5
                 ATTEMPT=$((ATTEMPT+1))
+                # Báo log file hỏng/đang thử lại
+                echo "[!] Segment $IDX file hỏng (Thử lại $ATTEMPT/$MAX_RETRIES)..."
                 continue
               }
 
-              # Đổi tên khi thành công
+              # Thành công
               mv "$FILE.tmp" "$FILE"
               return 0
             done
             
-            echo "LỖI KHI TẢI SEGMENT: $IDX. Đã thử $MAX_RETRIES lần thất bại!"
-            exit 1
+            # Xử lý khi HẾT LƯỢT THỬ LẠI
+            if [ "$IDX" -eq "$((TOTAL - 1))" ]; then
+              # Nếu là file CUỐI CÙNG -> Bỏ qua
+              echo "[SKIP] CẢNH BÁO: Segment cuối cùng ($IDX) thất bại sau $MAX_RETRIES lần. Bỏ qua..."
+              touch "segments/seg_$(printf "%05d" "$IDX").skipped"
+              return 0
+            else
+              # Nếu là file giữa chừng -> Lỗi nghiêm trọng
+              echo "[ERROR] Segment $IDX tải thất bại hoàn toàn sau $MAX_RETRIES lần!"
+              touch "segments/FAILED_CRITICAL"
+              return 1
+            fi
           }
 
           echo "Starting parallel download..."
@@ -119,39 +132,56 @@ jobs:
           for ((i=0;i<TOTAL;i++)); do
             download_segment "$i" &
 
-            while [ "$(jobs -p | wc -l)" -ge 10 ]; do
+            while[ "$(jobs -p | wc -l)" -ge 10 ]; do
               sleep 1
             done
           done
 
-          # VÒNG LẶP CHỜ VÀ HIỂN THỊ LOG (Thay thế Logger cũ)
-          DONE=0
-          while [ "$DONE" -lt "$TOTAL" ]; do
-            # Bắt buộc chỉ đếm file .ts (bỏ qua các file .tmp đang tải dở)
-            DONE=$(find segments -maxdepth 1 -name "*.ts" 2>/dev/null | wc -l || echo 0)
-            echo "Downloading... $DONE / $TOTAL segments"
+          # VÒNG LẶP CHỜ VÀ TÌM FILE THIẾU
+          while true; do
+            if [ -f "segments/FAILED_CRITICAL" ]; then
+              echo "Có segment ở giữa video không thể tải được. Hủy bỏ quá trình..."
+              exit 1
+            fi
+
+            SUCCESS=$(find segments -maxdepth 1 -name "*.ts" 2>/dev/null | wc -l || echo 0)
+            SKIPPED=$(find segments -maxdepth 1 -name "*.skipped" 2>/dev/null | wc -l || echo 0)
+            DONE=$((SUCCESS + SKIPPED))
             
             if [ "$DONE" -eq "$TOTAL" ]; then
+              echo "Hoàn tất! Đã xử lý $TOTAL segments ($SUCCESS thành công, $SKIPPED bỏ qua)."
               break
             fi
+
+            # Tìm và hiển thị các segment đang kẹt/chưa tải xong
+            MISSING=""
+            for ((i=0; i<TOTAL; i++)); do
+              FILE=$(printf "segments/seg_%05d" "$i")
+              if [ ! -f "${FILE}.ts" ] &&[ ! -f "${FILE}.skipped" ]; then
+                MISSING="$MISSING $i"
+              fi
+            done
+            
+            # Rút gọn danh sách lỗi nếu quá dài (hiển thị 10 file đầu)
+            MISSING_PREVIEW=$(echo "$MISSING" | awk '{for(i=1;i<=10&&i<=NF;i++) printf $i" "; if(NF>10) print "..."}')
+
+            echo "Downloading... $DONE / $TOTAL segments"
+            echo "Đang chờ / Đang lỗi ở các segments:[ $MISSING_PREVIEW ]"
+            
             sleep 15
           done
 
-          # Đảm bảo dọn dẹp các background jobs cuối cùng
           wait
 
-          echo "All segments downloaded"
-
           echo "Creating concat list..."
-
           rm -f list.txt
 
+          # Việc for qua *.ts sẽ tự động loại trừ các file .skipped
           for f in segments/*.ts; do
             echo "file '$f'" >> list.txt
           done
 
           echo "Merging video..."
-
           ffmpeg -loglevel error \
             -f concat \
             -safe 0 \
@@ -160,30 +190,33 @@ jobs:
             input_video.mp4
 
           echo "Checking duration..."
-
           EXPECTED=$(grep "#EXTINF" playlist.m3u8 | awk -F: '{sum+=$2} END{print int(sum)}')
 
           ACTUAL=$(ffprobe -v error \
             -show_entries format=duration \
             -of default=noprint_wrappers=1:nokey=1 \
-            input_video.mp4)
-
+            input_video.mp4 || echo "0")
           ACTUAL=${ACTUAL%.*}
 
           echo "Expected: $EXPECTED"
           echo "Actual: $ACTUAL"
 
           DIFF=$(echo "$EXPECTED $ACTUAL" | awk '{print ($1>$2)?$1-$2:$2-$1}')
-
           echo "Duration difference: $DIFF seconds"
 
+          # Nới lỏng kiểm tra thời lượng nếu file cuối bị bỏ qua
+          MAX_DIFF=5
+          if[ "$SKIPPED" -gt 0 ]; then
+            # Nới sai số lên 20 giây để bù trừ cho segment cuối bị thiếu
+            MAX_DIFF=20 
+            echo "[INFO] Segment cuối bị bỏ qua nên mở rộng biên độ sai số thời lượng thành 20s"
+          fi
+
           echo "Checking decode errors..."
-
           ERRORS=$(ffmpeg -v error -i input_video.mp4 -f null - 2>&1 | wc -l)
-
           echo "Decode errors: $ERRORS"
 
-          if [ "$DIFF" -gt 5 ] || [ "$ERRORS" -ne 0 ]; then
+          if[ "$DIFF" -gt "$MAX_DIFF" ] || [ "$ERRORS" -ne 0 ]; then
             echo "Video verification failed"
             exit 1
           fi
@@ -191,38 +224,13 @@ jobs:
           echo "Video verified successfully"
 
           echo "Collecting video information..."
-
           SIZE=$(du -h input_video.mp4 | cut -f1)
-
-          DURATION=$(ffprobe -v error \
-            -show_entries format=duration \
-            -of default=noprint_wrappers=1:nokey=1 \
-            input_video.mp4)
-
-          BITRATE=$(ffprobe -v error \
-            -show_entries format=bit_rate \
-            -of default=noprint_wrappers=1:nokey=1 \
-            input_video.mp4)
-
-          WIDTH=$(ffprobe -v error \
-            -select_streams v:0 \
-            -show_entries stream=width \
-            -of csv=p=0 input_video.mp4)
-
-          HEIGHT=$(ffprobe -v error \
-            -select_streams v:0 \
-            -show_entries stream=height \
-            -of csv=p=0 input_video.mp4)
-
-          FPS=$(ffprobe -v error \
-            -select_streams v:0 \
-            -show_entries stream=r_frame_rate \
-            -of csv=p=0 input_video.mp4)
-
-          CODEC=$(ffprobe -v error \
-            -select_streams v:0 \
-            -show_entries stream=codec_name \
-            -of csv=p=0 input_video.mp4)
+          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 input_video.mp4)
+          BITRATE=$(ffprobe -v error -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 input_video.mp4)
+          WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 input_video.mp4)
+          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 input_video.mp4)
+          FPS=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 input_video.mp4)
+          CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 input_video.mp4)
 
           echo "================ VIDEO INFO ================"
           echo "File: input_video.mp4"
