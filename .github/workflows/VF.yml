@@ -73,7 +73,7 @@ jobs:
             ATTEMPT=0
             MAX_RETRIES=20 # Giới hạn thử lại 20 lần
 
-            while[ "$ATTEMPT" -lt "$MAX_RETRIES" ]; do
+            while [ "$ATTEMPT" -lt "$MAX_RETRIES" ]; do
               DOMAIN=${DOMAINS[$((ATTEMPT % ${#DOMAINS[@]}))]}
               SEG_PATH=$(echo "$SEG" | sed -E 's|^/?[^/]+/|/|')
               FULL="$PREFIX/$DOMAIN$SEG_PATH"
@@ -114,7 +114,7 @@ jobs:
             done
             
             # XỬ LÝ KHI HẾT LƯỢT THỬ LẠI (20 LẦN THẤT BẠI)
-            if[ "$IDX" -eq "$((TOTAL - 1))" ]; then
+            if [ "$IDX" -eq "$((TOTAL - 1))" ]; then
               echo "[SKIP] CẢNH BÁO: Segment cuối cùng ($IDX) thất bại sau $MAX_RETRIES lần. Bỏ qua..."
               touch "segments/seg_$(printf "%05d" "$IDX").skipped"
               return 0
@@ -131,7 +131,7 @@ jobs:
             download_segment "$i" &
 
             # Giới hạn tải 10 file cùng lúc
-            while[ "$(jobs -p | wc -l)" -ge 10 ]; do
+            while [ "$(jobs -p | wc -l)" -ge 10 ]; do
               sleep 1
             done
           done
@@ -155,7 +155,7 @@ jobs:
             MISSING=""
             for ((i=0; i<TOTAL; i++)); do
               FILE=$(printf "segments/seg_%05d" "$i")
-              if[ ! -f "${FILE}.ts" ] && [ ! -f "${FILE}.skipped" ]; then
+              if [ ! -f "${FILE}.ts" ] && [ ! -f "${FILE}.skipped" ]; then
                 MISSING="$MISSING $i"
               fi
             done
@@ -204,12 +204,12 @@ jobs:
           ERRORS=$(ffmpeg -v error -i input_video.mp4 -f null - 2>&1 | wc -l || true)
           echo "Decode errors: $ERRORS"
 
-          if[ "$DIFF" -gt "$MAX_DIFF" ]; then
+          if [ "$DIFF" -gt "$MAX_DIFF" ]; then
             echo "[LỖI NẶNG] Sai số thời lượng quá lớn ($DIFF giây). Xác nhận video bị hỏng."
             exit 1
           fi
 
-          if[ "$ERRORS" -gt 0 ]; then
+          if [ "$ERRORS" -gt 0 ]; then
             echo "[WARNING] Phát hiện $ERRORS lỗi khung hình (Frame corruption) trong video gốc. Sẽ tự động khôi phục lúc Re-Encode!"
           fi
 
