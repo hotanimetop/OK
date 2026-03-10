@@ -73,7 +73,7 @@ jobs:
             ATTEMPT=0
             MAX_RETRIES=20 # Giới hạn thử lại 20 lần
 
-            while[ "$ATTEMPT" -lt "$MAX_RETRIES" ]; do
+            while [ "$ATTEMPT" -lt "$MAX_RETRIES" ]; do
               DOMAIN=${DOMAINS[$((ATTEMPT % ${#DOMAINS[@]}))]}
               SEG_PATH=$(echo "$SEG" | sed -E 's|^/?[^/]+/|/|')
               FULL="$PREFIX/$DOMAIN$SEG_PATH"
@@ -91,7 +91,7 @@ jobs:
                 -o "$FILE.tmp" \
                 "$FULL" || true
 
-              if[ ! -f "$FILE.tmp" ]; then
+              if [ ! -f "$FILE.tmp" ]; then
                 sleep 5
                 ATTEMPT=$((ATTEMPT+1))
                 # Báo log đang lỗi/đang thử lại
@@ -132,7 +132,7 @@ jobs:
           for ((i=0;i<TOTAL;i++)); do
             download_segment "$i" &
 
-            while[ "$(jobs -p | wc -l)" -ge 10 ]; do
+            while [ "$(jobs -p | wc -l)" -ge 10 ]; do
               sleep 1
             done
           done
@@ -206,7 +206,7 @@ jobs:
 
           # Nới lỏng kiểm tra thời lượng nếu file cuối bị bỏ qua
           MAX_DIFF=5
-          if[ "$SKIPPED" -gt 0 ]; then
+          if [ "$SKIPPED" -gt 0 ]; then
             # Nới sai số lên 20 giây để bù trừ cho segment cuối bị thiếu
             MAX_DIFF=20 
             echo "[INFO] Segment cuối bị bỏ qua nên mở rộng biên độ sai số thời lượng thành 20s"
@@ -216,7 +216,7 @@ jobs:
           ERRORS=$(ffmpeg -v error -i input_video.mp4 -f null - 2>&1 | wc -l)
           echo "Decode errors: $ERRORS"
 
-          if[ "$DIFF" -gt "$MAX_DIFF" ] || [ "$ERRORS" -ne 0 ]; then
+          if [ "$DIFF" -gt "$MAX_DIFF" ] || [ "$ERRORS" -ne 0 ]; then
             echo "Video verification failed"
             exit 1
           fi
