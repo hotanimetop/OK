@@ -56,7 +56,6 @@ jobs:
           echo "Downloading playlist..."
           curl -sL "$M3U8" -o playlist.m3u8
 
-          # Lọc bỏ các dòng comment và dòng trống để lấy đúng link segment
           grep -v '^#' playlist.m3u8 | grep -v '^[[:space:]]*$' > segments.txt
           TOTAL=$(wc -l < segments.txt)
 
@@ -71,14 +70,13 @@ jobs:
             FILE=$(printf "segments/seg_%05d.ts" "$IDX")
             
             ATTEMPT=0
-            MAX_RETRIES=20 # Giới hạn thử lại 20 lần
+            MAX_RETRIES=20
 
             while [ "$ATTEMPT" -lt "$MAX_RETRIES" ]; do
               DOMAIN=${DOMAINS[$((ATTEMPT % ${#DOMAINS[@]}))]}
               SEG_PATH=$(echo "$SEG" | sed -E 's|^/?[^/]+/|/|')
               FULL="$PREFIX/$DOMAIN$SEG_PATH"
 
-              # Thêm biến ngẫu nhiên để ép server nhả cache nếu lỗi nhiều lần
               if (( ATTEMPT >= 5 )); then
                 RAND=$RANDOM
                 FULL="$FULL?v=$RAND"
@@ -99,7 +97,6 @@ jobs:
                 continue
               fi
 
-              # Kiểm tra file có bị hỏng nặng không (chỉ test vỏ)
               ffprobe -v error "$FILE.tmp" >/dev/null 2>&1 || {
                 rm -f "$FILE.tmp"
                 sleep 5
@@ -108,12 +105,10 @@ jobs:
                 continue
               }
 
-              # Thành công -> đổi tên file thành .ts
               mv "$FILE.tmp" "$FILE"
               return 0
             done
             
-            # XỬ LÝ KHI HẾT LƯỢT THỬ LẠI (20 LẦN THẤT BẠI)
             if [ "$IDX" -eq "$((TOTAL - 1))" ]; then
               echo "[SKIP] CẢNH BÁO: Segment cuối cùng ($IDX) thất bại sau $MAX_RETRIES lần. Bỏ qua..."
               touch "segments/seg_$(printf "%05d" "$IDX").skipped"
@@ -130,13 +125,11 @@ jobs:
           for ((i=0;i<TOTAL;i++)); do
             download_segment "$i" &
 
-            # Giới hạn tải 10 file cùng lúc
             while [ "$(jobs -p | wc -l)" -ge 10 ]; do
               sleep 1
             done
           done
 
-          # VÒNG LẶP CHỜ VÀ GIÁM SÁT TIẾN ĐỘ
           while true; do
             if [ -f "segments/FAILED_CRITICAL" ]; then
               echo "Có segment ở giữa video không thể tải được. Hủy bỏ quá trình..."
@@ -163,7 +156,7 @@ jobs:
             MISSING_PREVIEW=$(echo "$MISSING" | awk '{for(i=1;i<=10&&i<=NF;i++) printf $i" "; if(NF>10) print "..."}')
 
             echo "Downloading... $DONE / $TOTAL segments"
-            echo "Đang chờ / Đang lỗi ở các segments: [ $MISSING_PREVIEW ]"
+            echo "Đang chờ / Đang lỗi ở các segments:[ $MISSING_PREVIEW ]"
             
             sleep 15
           done
@@ -171,12 +164,12 @@ jobs:
           wait
           echo "All background downloads finished."
 
-          # NỐI FILE BẰNG CÁCH GỘP NHỊ PHÂN TRỰC TIẾP ĐỂ TRÁNH LỆCH TIMECODE
           echo "Merging video streams directly (Binary Concat)..."
           cat segments/*.ts > combined.ts
           
-          # Đóng gói lại thành MP4
-          ffmpeg -loglevel error -y -i combined.ts -c copy input_video.mp4
+          echo "Converting to MP4 & Re-building audio track to fix ADTS errors..."
+          # ĐIỂM QUAN TRỌNG NHẤT: -c:v copy (giữ hình) và -c:a aac (sửa tiếng)
+          ffmpeg -loglevel error -y -i combined.ts -map 0:v? -map 0:a? -c:v copy -c:a aac input_video.mp4
           rm -f combined.ts
 
           echo "Checking duration..."
@@ -194,7 +187,6 @@ jobs:
           DIFF=$(echo "$EXPECTED $ACTUAL" | awk '{print ($1>$2)?$1-$2:$2-$1}')
           echo "Duration difference: $DIFF seconds"
 
-          # Nới lỏng kiểm tra thời lượng lên tối đa 60 giây (Cho phép thừa/thiếu 1 phút)
           MAX_DIFF=60 
           if [ "$SKIPPED" -gt 0 ]; then
             echo "[INFO] Segment cuối bị bỏ qua."
