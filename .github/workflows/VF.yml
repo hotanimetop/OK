@@ -226,35 +226,46 @@ jobs:
           echo "Bitrate: $BITRATE"
           echo "==========================================="
           
-      - name: Re-Encode & Convert to HLS fMP4 (Strict 5.00s Segments as PNG)
+      - name: Convert to HLS fMP4 (Copy Video & Encode Audio)
         run: |
           mkdir -p output
+          SLUG="${{ github.event.inputs.slug }}"
           
-          # Cập nhật Encode:
-          # -r 30 : Ép cố định 30 hình/giây
-          # -g 150 -keyint_min 150 : Buộc tạo Keyframe mỗi 150 hình (Chính xác 5 giây sẽ có 1 điểm cắt)
-          # -ar 48000 : Ép audio sample rate để cắt file không bị lệch nhịp
+          echo "==========================================="
+          echo "PHƯƠNG THỨC: COPY VIDEO (NO ENCODE)"
+          echo "ENCODE AUDIO: AAC 128k"
+          echo "FORMAT: HLS fMP4 (.png extension)"
+          echo "==========================================="
+          
+          # Chạy FFMPEG: 
+          # -c:v copy -> Giữ nguyên định dạng video gốc (không tốn CPU)
+          # -c:a aac -> Encode lại âm thanh để đảm bảo tương thích
+          # -hls_flags independent_segments -> Rất quan trọng khi dùng 'copy' để mỗi segment bắt đầu bằng Keyframe
           
           ffmpeg -y -stats_period 30 -i input_video.mp4 \
-            -map 0:v:0 -map 0:a? \
-            -c:v libx264 -pix_fmt yuv420p -profile:v high -level 4.1 -crf 23 -preset medium \
-            -maxrate 1800k -bufsize 3000k \
-            -r 30 -g 150 -keyint_min 150 -sc_threshold 0 \
-            -c:a aac -b:a 96k -ac 2 -ar 48000 -threads 0 \
-            -f hls \
-            -start_number 10001 \
-            -hls_time 5 \
-            -hls_list_size 0 \
-            -hls_segment_type fmp4 \
-            -hls_fmp4_init_filename "${{ github.event.inputs.slug }}-index.png" \
-            -hls_segment_filename "output/${{ github.event.inputs.slug }}-index%d.png" \
-            "output/${{ github.event.inputs.slug }}.m3u8"
+          -map 0:v:0 -map 0:a? \
+          -c:v copy \
+          -c:a aac -b:a 96k -ac 2 -ar 48000 \
+          -f hls \
+          -start_number 10001 \
+          -hls_time 5 \
+          -hls_list_size 0 \
+          -hls_flags independent_segments \
+          -hls_segment_type fmp4 \
+          -hls_fmp4_init_filename "${SLUG}-index.png" \
+          -hls_segment_filename "output/${SLUG}-index%d.png" \
+          "output/${SLUG}.m3u8"
           
           # Kiểm tra xem file m3u8 có được tạo không
-          if [ ! -f "output/${{ github.event.inputs.slug }}.m3u8" ]; then
+          if [ ! -f "output/${SLUG}.m3u8" ]; then
             echo "FFmpeg failed to create m3u8"
             exit 1
           fi
+
+          echo "==========================================="
+          echo "CHUYỂN ĐỔI HOÀN TẤT"
+          ls -lh output/
+          echo "==========================================="
 
       - name: Deploy to Cloudflare Pages (first)
         id: deploy1
