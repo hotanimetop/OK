@@ -1,4 +1,4 @@
-name: VK to M3U8
+name: GD to M3U8
 
 on:
   workflow_dispatch:
