@@ -1,0 +1,142 @@
+name: HiHi M3U8 Download
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'Link'
+        required: true
+      slug:
+        description: 'Slug'
+        required: true
+      token:
+        description: 'Token'
+        required: true
+      page:
+        description: 'Pages'
+        required: true
+      account:
+        description: 'Account'
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Download + Verify M3U8 Video
+        run: |
+          ffmpeg -y -i "${{ github.event.inputs.link }}" -c copy -bsf:a aac_adtstoasc input_video.mp4
+          
+      - name: Convert to HLS fMP4 (Copy Video & Encode Audio)
+        run: |
+          mkdir -p output
+          SLUG="${{ github.event.inputs.slug }}"
+          
+          echo "==========================================="
+          echo "PHƯƠNG THỨC: COPY VIDEO (NO ENCODE)"
+          echo "ENCODE AUDIO: AAC 128k"
+          echo "FORMAT: HLS fMP4 (.png extension)"
+          echo "==========================================="
+          
+          # Chạy FFMPEG: 
+          # -c:v copy -> Giữ nguyên định dạng video gốc (không tốn CPU)
+          # -c:a aac -> Encode lại âm thanh để đảm bảo tương thích
+          # -hls_flags independent_segments -> Rất quan trọng khi dùng 'copy' để mỗi segment bắt đầu bằng Keyframe
+          
+          ffmpeg -y -stats_period 30 -i input_video.mp4 \
+          -map 0:v:0 -map 0:a? \
+          -c:v copy \
+          -c:a aac -b:a 96k -ac 2 -ar 48000 \
+          -f hls \
+          -start_number 10001 \
+          -hls_time 5 \
+          -hls_list_size 0 \
+          -hls_flags independent_segments \
+          -hls_segment_type fmp4 \
+          -hls_fmp4_init_filename "${SLUG}-index.png" \
+          -hls_segment_filename "output/${SLUG}-index%d.png" \
+          "output/${SLUG}.m3u8"
+          
+          # Kiểm tra xem file m3u8 có được tạo không
+          if [ ! -f "output/${SLUG}.m3u8" ]; then
+            echo "FFmpeg failed to create m3u8"
+            exit 1
+          fi
+
+          echo "==========================================="
+          echo "CHUYỂN ĐỔI HOÀN TẤT"
+          ls -lh output/
+          echo "==========================================="
+
+      - name: Deploy to Cloudflare Pages (first)
+        id: deploy1
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.account }}
+          projectName: ${{ github.event.inputs.page }}
+          directory: ./output
+          branch: ${{ github.event.inputs.slug }}
+
+      - name: Verify Cloudflare deployment (branch domain check)
+        id: verify
+        continue-on-error: true
+        env:
+          PROJECT: ${{ github.event.inputs.page }}
+          BRANCH: ${{ github.event.inputs.slug }}
+        run: |
+          set -e
+          FILE_URL="https://${{ github.event.inputs.slug }}.${{ github.event.inputs.page }}.pages.dev/${{ github.event.inputs.slug }}.m3u8"
+
+          echo "[TARGET] $FILE_URL"
+
+          check () {
+            code=$(curl -L -o /dev/null -s -w "%{http_code}" "$FILE_URL")
+            echo "HTTP CODE: $code"
+            [ "$code" = "200" ]
+          }
+
+          echo "[WAIT] Waiting 1 minutes for Pages propagation..."
+          sleep 60
+
+          echo "[CHECK #1]"
+          if check; then
+            echo "[SUCCESS] File exists"
+            curl -G "https://cp.ssplay.net/vicdn.php" \
+            --data-urlencode "type=ok0" \
+            --data-urlencode "key=${{ github.event.inputs.page }}" \
+            --data-urlencode "slug=${{ github.event.inputs.slug }}"
+            exit 0
+          fi
+
+          echo "[WAIT] Still not found, wait extra 3 minutes..."
+          sleep 180
+
+          echo "[CHECK #2]"
+          if check; then
+            echo "[SUCCESS] File exists after delay"
+            exit 0
+          fi
+
+          echo "[FAIL] File still missing → mark for redeploy"
+          echo "NEED_REDEPLOY=true" >> $GITHUB_ENV
+          exit 1
+
+      - name: Deploy to Cloudflare Pages (retry – reuse encoded files)
+        if: env.NEED_REDEPLOY == 'true'
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.account }}
+          projectName: ${{ github.event.inputs.page }}
+          directory: ./output
+          branch: ${{ github.event.inputs.slug }}
