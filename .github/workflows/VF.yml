@@ -127,7 +127,7 @@ jobs:
             for ((i=0;i<TOTAL;i++)); do
               download_segment "$i" &
               # Giới hạn số lượng tiến trình chạy ngầm
-              while [ "$(jobs -p | wc -l)" -ge 10 ]; do sleep 1; done
+              while [ "$(jobs -p | wc -l)" -ge 1 ]; do sleep 1; done
             done
             wait
 
