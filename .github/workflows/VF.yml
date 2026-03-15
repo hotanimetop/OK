@@ -32,62 +32,63 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg aria2 curl jq
           python3 -m pip install -U yt-dlp
-
       - name: Download + Verify M3U8 Video
         shell: bash
         run: |
           set -e
           URL="${{ github.event.inputs.link }}"
           
-          MAX_RETRY_WORKFLOW=3
-          ATTEMPT_WORKFLOW=1
-          SUCCESS_VERIFY=false
+          # Cấu hình retry cho toàn bộ quá trình
+          MAX_RUN_ATTEMPTS=3
+          RUN_ATTEMPT=1
+          SUCCESS=false
 
-          while [ $ATTEMPT_WORKFLOW -le $MAX_RETRY_WORKFLOW ]; do
-            echo "========================================================="
-            echo "BẮT ĐẦU LẦN THỬ TẢI TOÀN BỘ: $ATTEMPT_WORKFLOW / $MAX_RETRY_WORKFLOW"
-            echo "========================================================="
+          while [ $RUN_ATTEMPT -le $MAX_RUN_ATTEMPTS ]; do
+            echo "==== BẮT ĐẦU LẦN THỬ $RUN_ATTEMPT/$MAX_RUN_ATTEMPTS ===="
             
-            # 1. Dọn dẹp dữ liệu cũ để tránh trùng lặp hoặc file rác từ lượt trước
+            # Xóa dữ liệu cũ để tránh lỗi file khi chạy lại
             rm -rf segments playlist.m3u8 segments.txt combined.ts input_video.mp4
-            mkdir -p segments
 
-            # 2. Lấy link M3U8 thực tế và xác định Base URL
-            echo "Đang phân tích link m3u8..."
+            DOMAINS=(
+              "thunderleaf12.online"
+              "aurorabird6.live"
+              "rainorbit33.xyz"
+              "frostcomet5.pro"
+              "nightbreeze17.site"
+            )
+
+            PREFIX="https://limit.fatherlessdad.workers.dev"
+
+            echo "Getting real m3u8..."
             M3U8=$(yt-dlp -g "$URL")
-            # Tự động lấy Base URL (thư mục cha chứa các segment)
-            BASE_URL=$(echo "$M3U8" | sed 's/\?.*//' | rev | cut -d'/' -f2- | rev)
-            
-            echo "Base URL nhận diện được: $BASE_URL"
+
+            echo "Downloading playlist..."
             curl -sL "$M3U8" -o playlist.m3u8
-            
-            # 3. Trích xuất danh sách segment (bỏ comment và dòng trống)
+
             grep -v '^#' playlist.m3u8 | grep -v '^[[:space:]]*$' > segments.txt
             TOTAL=$(wc -l < segments.txt)
-            mapfile -t SEGS < segments.txt
-            echo "Tổng số segments cần tải: $TOTAL"
 
-            # 4. Hàm tải segment (Retry 20 lần cho mỗi mảnh)
+            echo "Total segments: $TOTAL"
+
+            mkdir -p segments
+            mapfile -t SEGS < segments.txt
+
             download_segment() {
               IDX=$1
               SEG="${SEGS[$IDX]}"
               FILE=$(printf "segments/seg_%05d.ts" "$IDX")
               
-              # Xử lý FULL_URL: Nếu link segment là tuyệt đối (http...) thì dùng luôn, nếu không thì ghép với BASE_URL
-              if [[ "$SEG" == http* ]]; then
-                FULL_URL="$SEG"
-              else
-                FULL_URL="${BASE_URL}/${SEG#/}"
-              fi
+              ATTEMPT=0
+              MAX_RETRIES=20
 
-              ATTEMPT_SEG=1
-              MAX_RETRIES_SEG=20
+              while [ "$ATTEMPT" -lt "$MAX_RETRIES" ]; do
+                DOMAIN=${DOMAINS[$((ATTEMPT % ${#DOMAINS[@]}))]}
+                SEG_PATH=$(echo "$SEG" | sed -E 's|^/?[^/]+/|/|')
+                FULL="$PREFIX/$DOMAIN$SEG_PATH"
 
-              while [ $ATTEMPT_SEG -le $MAX_RETRIES_SEG ]; do
-                CURRENT_URL="$FULL_URL"
-                # Thêm tham số ngẫu nhiên sau 5 lần lỗi để tránh cache lỗi từ server
-                if [ $ATTEMPT_SEG -ge 5 ]; then
-                  [[ "$CURRENT_URL" == *\?* ]] && CURRENT_URL="${CURRENT_URL}&v=$RANDOM" || CURRENT_URL="${CURRENT_URL}?v=$RANDOM"
+                if (( ATTEMPT >= 5 )); then
+                  RAND=$RANDOM
+                  FULL="$FULL?v=$RAND"
                 fi
 
                 /usr/bin/aria2c \
@@ -95,86 +96,107 @@ jobs:
                   --allow-overwrite=true \
                   --file-allocation=none \
                   --max-tries=1 \
-                  --connect-timeout=10 \
                   -o "$FILE.tmp" \
-                  "$CURRENT_URL" || true
+                  "$FULL" || true
 
-                # Kiểm tra file có tồn tại và có hợp lệ (không hỏng định dạng) không
-                if [ -f "$FILE.tmp" ] && ffprobe -v error "$FILE.tmp" >/dev/null 2>&1; then
-                  mv "$FILE.tmp" "$FILE"
-                  return 0
+                if [ ! -f "$FILE.tmp" ]; then
+                  sleep 5
+                  ATTEMPT=$((ATTEMPT+1))
+                  echo "[!] Segment $IDX tải lỗi mạng (Thử lại $ATTEMPT/$MAX_RETRIES)..."
+                  continue
                 fi
 
-                echo "[!] Segment $IDX lỗi hoặc hỏng. Thử lại lượt $ATTEMPT_SEG/$MAX_RETRIES_SEG..."
-                ATTEMPT_SEG=$((ATTEMPT_SEG+1))
-                sleep 2
+                ffprobe -v error "$FILE.tmp" >/dev/null 2>&1 || {
+                  rm -f "$FILE.tmp"
+                  sleep 5
+                  ATTEMPT=$((ATTEMPT+1))
+                  echo "[!] Segment $IDX file hỏng (Thử lại $ATTEMPT/$MAX_RETRIES)..."
+                  continue
+                }
+
+                mv "$FILE.tmp" "$FILE"
+                return 0
               done
               
-              # Nếu lỗi ở segment cuối cùng thì cho qua (skipped), nếu lỗi ở giữa thì đánh dấu hỏng nặng
               if [ "$IDX" -eq "$((TOTAL - 1))" ]; then
-                echo "[SKIP] Cảnh báo: Segment cuối ($IDX) thất bại. Bỏ qua..."
+                echo "[SKIP] CẢNH BÁO: Segment cuối cùng ($IDX) thất bại sau $MAX_RETRIES lần. Bỏ qua..."
                 touch "segments/seg_$(printf "%05d" "$IDX").skipped"
                 return 0
               else
-                echo "[ERROR] Segment $IDX tải thất bại hoàn toàn!"
+                echo "[ERROR] Segment $IDX (ở giữa video) tải thất bại hoàn toàn sau $MAX_RETRIES lần!"
                 touch "segments/FAILED_CRITICAL"
                 return 1
               fi
             }
 
-            # 5. Khởi chạy tải song song (10 luồng)
-            export -f download_segment
+            echo "Starting parallel download..."
+
             for ((i=0;i<TOTAL;i++)); do
               download_segment "$i" &
-              # Giới hạn số lượng tiến trình chạy ngầm
-              while [ "$(jobs -p | wc -l)" -ge 1 ]; do sleep 1; done
-            done
-            wait
 
-            # 6. Kiểm tra xem có lỗi Critical nào xảy ra không
+              while [ "$(jobs -p | wc -l)" -ge 10 ]; do
+                sleep 1
+              done
+            done
+
+            while true; do
+              if [ -f "segments/FAILED_CRITICAL" ]; then
+                echo "Có segment ở giữa video không thể tải được."
+                break
+              fi
+
+              SUCCESS_COUNT=$(find segments -maxdepth 1 -name "*.ts" 2>/dev/null | wc -l || echo 0)
+              SKIPPED_COUNT=$(find segments -maxdepth 1 -name "*.skipped" 2>/dev/null | wc -l || echo 0)
+              DONE=$((SUCCESS_COUNT + SKIPPED_COUNT))
+              
+              if [ "$DONE" -eq "$TOTAL" ]; then
+                echo "Hoàn tất! Đã xử lý $TOTAL segments ($SUCCESS_COUNT thành công, $SKIPPED_COUNT bỏ qua)."
+                break
+              fi
+              sleep 10
+            done
+
+            wait
+            
             if [ -f "segments/FAILED_CRITICAL" ]; then
-              echo "Phát hiện lỗi tải segment ở giữa. Đang bắt đầu lại toàn bộ lượt mới..."
-              ATTEMPT_WORKFLOW=$((ATTEMPT_WORKFLOW+1))
+              echo "Lỗi tải segment. Chạy lại lượt tiếp theo..."
+              RUN_ATTEMPT=$((RUN_ATTEMPT+1))
               continue
             fi
 
-            # 7. Ghép video và Kiểm tra thời lượng
-            echo "Đang ghép các mảnh video (Binary Concat)..."
+            echo "Merging video streams directly (Binary Concat)..."
             cat segments/*.ts > combined.ts
             
-            echo "Chuyển đổi sang MP4 và sửa lỗi Audio..."
+            echo "Converting to MP4 & Re-building audio track to fix ADTS errors..."
             ffmpeg -loglevel error -y -i combined.ts -map 0:v? -map 0:a? -c:v copy -c:a aac input_video.mp4
-            
+            rm -f combined.ts
+
+            echo "Checking duration..."
             EXPECTED=$(grep "#EXTINF" playlist.m3u8 | awk -F: '{sum+=$2} END{print int(sum)}')
             ACTUAL=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 input_video.mp4 || echo "0")
             ACTUAL=${ACTUAL%.*}
-            
             DIFF=$(echo "$EXPECTED $ACTUAL" | awk '{print ($1>$2)?$1-$2:$2-$1}')
 
-            echo "================ KẾT QUẢ KIỂM TRA ================"
-            echo "Thời lượng dự kiến: $EXPECTED s"
-            echo "Thời lượng thực tế: $ACTUAL s"
-            echo "Chênh lệch: $DIFF s"
-            echo "=================================================="
-
-            if [ "$DIFF" -le 5 ]; then
-              echo "Xác nhận video hợp lệ (Sai số < 5s)."
-              SUCCESS_VERIFY=true
-              break
+            MAX_DIFF=5 
+            if [ "$DIFF" -le "$MAX_DIFF" ]; then
+               echo "Video verified successfully (Diff: $DIFF)"
+               SUCCESS=true
+               break
             else
-              echo "[LỖI] Video bị hỏng hoặc thiếu segments (Sai số $DIFF s). Đang thử tải lại toàn bộ..."
-              ATTEMPT_WORKFLOW=$((ATTEMPT_WORKFLOW+1))
-              sleep 5
+               echo "[LỖI NẶNG] Sai số thời lượng quá lớn ($DIFF giây). Thử lại lượt tiếp theo..."
+               RUN_ATTEMPT=$((RUN_ATTEMPT+1))
+               sleep 5
             fi
           done
 
-          if [ "$SUCCESS_VERIFY" = false ]; then
-            echo "THẤT BẠI: Đã thử $MAX_RETRY_WORKFLOW lần nhưng không thể tải video hoàn chỉnh."
+          if [ "$SUCCESS" = false ]; then
+            echo "Thất bại sau $MAX_RUN_ATTEMPTS lần thử."
             exit 1
           fi
 
-          echo "Video đã sẵn sàng. Tiến hành thu thập thông tin..."
+          echo "Collecting video information..."
           SIZE=$(du -h input_video.mp4 | cut -f1)
+          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 input_video.mp4 || echo "N/A")
           WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 input_video.mp4 | head -n1 || echo "N/A")
           HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 input_video.mp4 | head -n1 || echo "N/A")
           
@@ -217,12 +239,10 @@ jobs:
             echo "FFmpeg failed to create m3u8"
             exit 1
           fi
-
           echo "==========================================="
           echo "CHUYỂN ĐỔI HOÀN TẤT"
           ls -lh output/
           echo "==========================================="
-
       - name: Deploy to Cloudflare Pages (first)
         id: deploy1
         uses: cloudflare/pages-action@v1
@@ -242,18 +262,14 @@ jobs:
         run: |
           set -e
           FILE_URL="https://${{ github.event.inputs.slug }}.${{ github.event.inputs.page }}.pages.dev/${{ github.event.inputs.slug }}.m3u8"
-
           echo "[TARGET] $FILE_URL"
-
           check () {
             code=$(curl -L -o /dev/null -s -w "%{http_code}" "$FILE_URL")
             echo "HTTP CODE: $code"
             [ "$code" = "200" ]
           }
-
           echo "[WAIT] Waiting 1 minutes for Pages propagation..."
           sleep 60
-
           echo "[CHECK #1]"
           if check; then
             echo "[SUCCESS] File exists"
@@ -263,20 +279,16 @@ jobs:
             --data-urlencode "slug=${{ github.event.inputs.slug }}"
             exit 0
           fi
-
           echo "[WAIT] Still not found, wait extra 3 minutes..."
           sleep 180
-
           echo "[CHECK #2]"
           if check; then
             echo "[SUCCESS] File exists after delay"
             exit 0
           fi
-
           echo "[FAIL] File still missing → mark for redeploy"
           echo "NEED_REDEPLOY=true" >> $GITHUB_ENV
           exit 1
-
       - name: Deploy to Cloudflare Pages (retry – reuse encoded files)
         if: env.NEED_REDEPLOY == 'true'
         uses: cloudflare/pages-action@v1
