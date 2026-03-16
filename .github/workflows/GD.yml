@@ -36,7 +36,7 @@ jobs:
       ############################################################
       - name: Download Video from VKVideo
         run: |
-          curl -L "https://www.googleapis.com/drive/v3/files/${{ github.event.inputs.link }}?alt=media&key=AIzaSyD739-eb6NzS_KbVJq1K8ZAxnrMfkIqPyw" -o "input_video.mp4"
+          curl -L "${{ github.event.inputs.link }}" -o "input_video.mp4"
           
       - name: Convert to HLS fMP4 (Copy Video & Encode Audio)
         run: |
