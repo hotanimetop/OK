@@ -37,6 +37,53 @@ jobs:
       - name: Download Video from VKVideo
         run: |
           curl -L "${{ github.event.inputs.link }}" -o "input_video.mp4"
+
+                ############################################################
+      # EXTRACT SUBTITLE (ENG / VIE)
+      ############################################################
+      - name: Extract subtitles
+        run: |
+          SLUG="${{ github.event.inputs.slug }}"
+          
+          mkdir -p subs
+          
+          echo "==========================================="
+          echo "EXTRACT SUBTITLES"
+          echo "==========================================="
+
+          # Extract Vietnamese subtitle
+          ffmpeg -y -i input_video.mp4 -map 0:s:m:language:vie -c:s webvtt "subs/${SLUG}-vi.vtt" || true
+
+          # Extract English subtitle
+          ffmpeg -y -i input_video.mp4 -map 0:s:m:language:eng -c:s webvtt "subs/${SLUG}-en.vtt" || true
+
+          echo "Sub files:"
+          ls -lh subs/ || true
+
+
+      ############################################################
+      # UPLOAD SUBTITLE TO SERVER
+      ############################################################
+      - name: Upload subtitles
+        run: |
+          SLUG="${{ github.event.inputs.slug }}"
+          
+          upload_sub () {
+            FILE=$1
+            
+            if [ -f "$FILE" ]; then
+              echo "Uploading $FILE"
+              
+              curl -X POST https://vicdn.cc/sub.php \
+              -F "filename=$(basename $FILE)" \
+              -F "file=@$FILE"
+            else
+              echo "Subtitle $FILE not found"
+            fi
+          }
+
+          upload_sub "subs/${SLUG}-vi.vtt"
+          upload_sub "subs/${SLUG}-en.vtt"
           
       - name: Convert to HLS fMP4 (Copy Video & Encode Audio)
         run: |
