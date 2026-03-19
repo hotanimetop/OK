@@ -57,6 +57,9 @@ jobs:
           # Extract English subtitle
           ffmpeg -y -i input_video.mp4 -map 0:s:m:language:eng -c:s webvtt "subs/${SLUG}-en.vtt" || true
 
+          # Extract English subtitle
+          ffmpeg -y -i input_video.mp4 -map 0:s:m:language:chi -c:s webvtt "subs/${SLUG}-cn.vtt" || true
+          
           echo "Sub files:"
           ls -lh subs/ || true
 
@@ -84,6 +87,7 @@ jobs:
 
           upload_sub "subs/${SLUG}-vi.vtt"
           upload_sub "subs/${SLUG}-en.vtt"
+          upload_sub "subs/${SLUG}-cn.vtt"
           
       - name: Convert to HLS fMP4 (Copy Video & Encode Audio)
         run: |
