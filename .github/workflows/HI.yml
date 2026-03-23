@@ -35,6 +35,22 @@ jobs:
       - name: Download + Verify M3U8 Video
         run: |
           ffmpeg -y -i "${{ github.event.inputs.link }}" -c copy -bsf:a aac_adtstoasc input_video.mp4
+
+          API_URL="https://animehehehe.vercel.app/api/stream?id=${{ github.event.inputs.link }}&server=hd-2&type=sub"
+          
+          echo "Calling API: $API_URL"
+          
+          RESPONSE=$(curl -s "$API_URL")
+          
+          echo "Response: $RESPONSE"
+          
+          M3U8=$(echo $RESPONSE | jq -r '.results.streamingLink.link.file')
+          
+          echo "M3U8 link: $M3U8"
+          
+          echo "m3u8=$M3U8" >> $GITHUB_OUTPUT
+          
+          ffmpeg -y -i "${{ steps.get_m3u8.outputs.m3u8 }}" -c copy -bsf:a aac_adtstoasc input_video.mp4
           
       - name: Convert to HLS fMP4 (Copy Video & Encode Audio)
         run: |
