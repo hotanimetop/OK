@@ -34,8 +34,6 @@ jobs:
 
       - name: Download + Verify M3U8 Video
         run: |
-          ffmpeg -y -i "${{ github.event.inputs.link }}" -c copy -bsf:a aac_adtstoasc input_video.mp4
-
           API_URL="https://animehehehe.vercel.app/api/stream?id=${{ github.event.inputs.link }}&server=hd-2&type=sub"
           
           echo "Calling API: $API_URL"
