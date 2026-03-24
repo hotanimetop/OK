@@ -111,7 +111,7 @@ jobs:
           -c:a aac -b:a 96k -ac 2 -ar 48000 \
           -f hls \
           -start_number 10001 \
-          -hls_time 3 \
+          -hls_time 5 \
           -hls_list_size 0 \
           -hls_flags independent_segments \
           -hls_segment_type fmp4 \
