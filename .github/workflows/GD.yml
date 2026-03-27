@@ -34,11 +34,28 @@ jobs:
       ############################################################
       # DOWNLOAD VKVIDEO
       ############################################################
-      - name: Download Video from VKVideo
+      - name: Download Video
         run: |
-          curl -L "${{ github.event.inputs.link }}" -o "input_video.mp4"
+          LINK="${{ github.event.inputs.link }}"
+      
+          if [[ "$LINK" == *"gofile.io"* ]]; then
+            echo "Detected Gofile link → using aria2"
+      
+            sudo apt-get install -y aria2
+      
+            aria2c \
+              --header="User-Agent: Mozilla/5.0" \
+              --header="Referer: https://gofile.io/" \
+              "$LINK" \
+              -o input_video.mp4
+      
+          else
+            echo "Using curl"
+      
+            curl -L "$LINK" -o input_video.mp4
+          fi
 
-                ############################################################
+      ############################################################
       # EXTRACT SUBTITLE (ENG / VIE)
       ############################################################
       - name: Extract subtitles
