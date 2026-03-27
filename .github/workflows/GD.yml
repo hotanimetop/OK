@@ -44,10 +44,11 @@ jobs:
             sudo apt-get install -y aria2
       
             aria2c \
-              --header="User-Agent: Mozilla/5.0" \
-              --header="Referer: https://gofile.io/" \
-              "$LINK" \
-              -o input_video.mp4
+            --header="User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36" \
+            --header="Referer: https://gofile.io/" \
+            --header="Cookie: accountToken=AZuJfobGH4NSBtGgXPWLpuMbh5oehRHs" \
+            "LINK" \
+            -o input_video.mp4
       
           else
             echo "Using curl"
