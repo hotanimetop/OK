@@ -100,7 +100,7 @@ jobs:
                   "$FULL" || true
 
                 if [ ! -f "$FILE.tmp" ]; then
-                  sleep 5
+                  sleep 60
                   ATTEMPT=$((ATTEMPT+1))
                   echo "[!] Segment $IDX tải lỗi mạng (Thử lại $ATTEMPT/$MAX_RETRIES)..."
                   continue
