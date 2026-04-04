@@ -39,7 +39,7 @@ jobs:
           URL="${{ github.event.inputs.link }}"
           
           # Cấu hình retry cho toàn bộ quá trình
-          MAX_RUN_ATTEMPTS=3
+          MAX_RUN_ATTEMPTS=5
           RUN_ATTEMPT=1
           SUCCESS=false
 
