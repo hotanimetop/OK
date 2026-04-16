@@ -50,7 +50,10 @@ jobs:
       
             echo "Getting real m3u8..."
             M3U8=$(yt-dlp -g "$URL")
-      
+            
+            # Lấy origin (scheme + host) từ M3U8 URL
+            ORIGIN=$(echo "$M3U8" | grep -oP '^https?://[^/]+')
+            
             echo "Downloading playlist..."
             curl -sL "$M3U8" -o playlist.m3u8
       
@@ -63,10 +66,16 @@ jobs:
             mapfile -t SEGS < segments.txt
       
             download_segment() {
-              IDX=$1
-              SEG="${SEGS[$IDX]}"
-              FILE=$(printf "segments/seg_%05d.ts" "$IDX")
-              
+            IDX=$1
+            SEG="${SEGS[$IDX]}"
+            FILE=$(printf "segments/seg_%05d.ts" "$IDX")
+          
+            # Nếu SEG là relative path thì ghép ORIGIN vào
+            if [[ "$SEG" != http* ]]; then
+              FULL="${ORIGIN}${SEG}"
+            else
+              FULL="$SEG"
+            fi
               ATTEMPT=0
               MAX_RETRIES=20
       
