@@ -32,47 +32,36 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg aria2 curl jq
           python3 -m pip install -U yt-dlp
+          
       - name: Download + Verify M3U8 Video
         shell: bash
         run: |
           set -e
           URL="${{ github.event.inputs.link }}"
           
-          # Cấu hình retry cho toàn bộ quá trình
           MAX_RUN_ATTEMPTS=5
           RUN_ATTEMPT=1
           SUCCESS=false
-
+      
           while [ $RUN_ATTEMPT -le $MAX_RUN_ATTEMPTS ]; do
             echo "==== BẮT ĐẦU LẦN THỬ $RUN_ATTEMPT/$MAX_RUN_ATTEMPTS ===="
             
-            # Xóa dữ liệu cũ để tránh lỗi file khi chạy lại
             rm -rf segments playlist.m3u8 segments.txt combined.ts input_video.mp4
-
-            DOMAINS=(
-              "thunderleaf12.online"
-              "aurorabird6.live"
-              "rainorbit33.xyz"
-              "frostcomet5.pro"
-              "nightbreeze17.site"
-            )
-
-            PREFIX="https://limit.fatherlessdad.workers.dev"
-
+      
             echo "Getting real m3u8..."
             M3U8=$(yt-dlp -g "$URL")
-
+      
             echo "Downloading playlist..."
             curl -sL "$M3U8" -o playlist.m3u8
-
+      
             grep -v '^#' playlist.m3u8 | grep -v '^[[:space:]]*$' > segments.txt
             TOTAL=$(wc -l < segments.txt)
-
+      
             echo "Total segments: $TOTAL"
-
+      
             mkdir -p segments
             mapfile -t SEGS < segments.txt
-
+      
             download_segment() {
               IDX=$1
               SEG="${SEGS[$IDX]}"
@@ -80,17 +69,10 @@ jobs:
               
               ATTEMPT=0
               MAX_RETRIES=20
-
+      
               while [ "$ATTEMPT" -lt "$MAX_RETRIES" ]; do
-                DOMAIN=${DOMAINS[$((ATTEMPT % ${#DOMAINS[@]}))]}
-                SEG_PATH=$(echo "$SEG" | sed -E 's|^/?[^/]+/|/|')
-                FULL="$PREFIX/$DOMAIN$SEG_PATH"
-
-                if (( ATTEMPT >= 5 )); then
-                  RAND=$RANDOM
-                  FULL="$FULL?v=$RAND"
-                fi
-
+                FULL="$SEG"
+      
                 /usr/bin/aria2c \
                   --quiet=true \
                   --allow-overwrite=true \
@@ -98,14 +80,14 @@ jobs:
                   --max-tries=1 \
                   -o "$FILE.tmp" \
                   "$FULL" || true
-
+      
                 if [ ! -f "$FILE.tmp" ]; then
                   sleep 10
                   ATTEMPT=$((ATTEMPT+1))
                   echo "[!] Segment $IDX tải lỗi mạng (Thử lại $ATTEMPT/$MAX_RETRIES)..."
                   continue
                 fi
-
+      
                 ffprobe -v error "$FILE.tmp" >/dev/null 2>&1 || {
                   rm -f "$FILE.tmp"
                   sleep 5
@@ -113,71 +95,59 @@ jobs:
                   echo "[!] Segment $IDX file hỏng (Thử lại $ATTEMPT/$MAX_RETRIES)..."
                   continue
                 }
-
+      
                 mv "$FILE.tmp" "$FILE"
                 return 0
               done
               
               if [ "$IDX" -eq "$((TOTAL - 1))" ]; then
-                echo "[SKIP] CẢNH BÁO: Segment cuối cùng ($IDX) thất bại sau $MAX_RETRIES lần. Bỏ qua..."
+                echo "[SKIP] CẢNH BÁO: Segment cuối ($IDX) thất bại sau $MAX_RETRIES lần. Bỏ qua..."
                 touch "segments/seg_$(printf "%05d" "$IDX").skipped"
                 return 0
               else
-                echo "[ERROR] Segment $IDX (ở giữa video) tải thất bại hoàn toàn sau $MAX_RETRIES lần!"
+                echo "[ERROR] Segment $IDX thất bại hoàn toàn sau $MAX_RETRIES lần!"
                 touch "segments/FAILED_CRITICAL"
                 return 1
               fi
             }
-
-            echo "Starting parallel download..."
-
-            for ((i=0;i<TOTAL;i++)); do
-              download_segment "$i" &
-
-              while [ "$(jobs -p | wc -l)" -ge 10 ]; do
-                sleep 1
-              done
-            done
-
-            while true; do
+      
+            echo "Starting sequential download (simulating real viewer)..."
+            FAILED=false
+      
+            for ((i=0; i<TOTAL; i++)); do
               if [ -f "segments/FAILED_CRITICAL" ]; then
-                echo "Có segment ở giữa video không thể tải được."
+                FAILED=true
                 break
               fi
-
-              SUCCESS_COUNT=$(find segments -maxdepth 1 -name "*.ts" 2>/dev/null | wc -l || echo 0)
-              SKIPPED_COUNT=$(find segments -maxdepth 1 -name "*.skipped" 2>/dev/null | wc -l || echo 0)
-              DONE=$((SUCCESS_COUNT + SKIPPED_COUNT))
-              
-              if [ "$DONE" -eq "$TOTAL" ]; then
-                echo "Hoàn tất! Đã xử lý $TOTAL segments ($SUCCESS_COUNT thành công, $SKIPPED_COUNT bỏ qua)."
-                break
-              fi
-              sleep 10
+      
+              download_segment "$i"
+      
+              # Delay ngẫu nhiên 1-2 giây giữa các segment
+              DELAY=$(awk -v min=1 -v max=2 'BEGIN{srand(); printf "%.1f", min+rand()*(max-min)}')
+              echo "[~] Chờ ${DELAY}s trước segment tiếp theo..."
+              sleep "$DELAY"
             done
-
-            wait
-            
-            if [ -f "segments/FAILED_CRITICAL" ]; then
+      
+            if [ "$FAILED" = true ] || [ -f "segments/FAILED_CRITICAL" ]; then
               echo "Lỗi tải segment. Chạy lại lượt tiếp theo..."
               RUN_ATTEMPT=$((RUN_ATTEMPT+1))
               continue
             fi
-
+      
             echo "Merging video streams directly (Binary Concat)..."
             cat segments/*.ts > combined.ts
             
             echo "Converting to MP4 & Re-building audio track to fix ADTS errors..."
             ffmpeg -loglevel error -y -i combined.ts -map 0:v? -map 0:a? -c:v copy -c:a aac input_video.mp4
             rm -f combined.ts
-
+      
             echo "Checking duration..."
             EXPECTED=$(grep "#EXTINF" playlist.m3u8 | awk -F: '{sum+=$2} END{print int(sum)}')
             ACTUAL=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 input_video.mp4 || echo "0")
             ACTUAL=${ACTUAL%.*}
             DIFF=$(echo "$EXPECTED $ACTUAL" | awk '{print ($1>$2)?$1-$2:$2-$1}')
-
-            MAX_DIFF=5 
+      
+            MAX_DIFF=5
             if [ "$DIFF" -le "$MAX_DIFF" ]; then
                echo "Video verified successfully (Diff: $DIFF)"
                SUCCESS=true
@@ -188,12 +158,12 @@ jobs:
                sleep 5
             fi
           done
-
+      
           if [ "$SUCCESS" = false ]; then
             echo "Thất bại sau $MAX_RUN_ATTEMPTS lần thử."
             exit 1
           fi
-
+      
           echo "Collecting video information..."
           SIZE=$(du -h input_video.mp4 | cut -f1)
           DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 input_video.mp4 || echo "N/A")
