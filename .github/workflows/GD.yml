@@ -107,23 +107,43 @@ jobs:
           upload_sub "subs/${SLUG}-en.vtt"
           upload_sub "subs/${SLUG}-cn.vtt"
           
-      - name: Convert to HLS fMP4 (Copy Video & Encode Audio)
+      - name: Check Codec and Convert to HLS fMP4
         run: |
           mkdir -p output
           SLUG="${{ github.event.inputs.slug }}"
-          
+          INPUT_FILE="input_video.mp4"
+          FINAL_INPUT="processed_video.mp4"
+
           echo "==========================================="
-          echo "PHƯƠNG THỨC: COPY VIDEO (NO ENCODE)"
-          echo "ENCODE AUDIO: AAC 128k"
-          echo "FORMAT: HLS fMP4 (.png extension)"
+          echo "KIỂM TRA ĐỊNH DẠNG VIDEO..."
+          
+          # Lấy thông tin codec video bằng ffprobe
+          VIDEO_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$INPUT_FILE")
+          
+          echo "Codec hiện tại: $VIDEO_CODEC"
+
+          if [ "$VIDEO_CODEC" = "h264" ]; then
+            echo "Video đã là H264. Sử dụng phương thức COPY để tiết kiệm tài nguyên."
+            FINAL_INPUT="$INPUT_FILE"
+          else
+            echo "Video là $VIDEO_CODEC. Bắt đầu chuyển đổi sang H264..."
+            ffmpeg -y -i "$INPUT_FILE" \
+              -c:v libx264 -pix_fmt yuv420p -profile:v high -level 4.1 -crf 23 -preset medium \
+              -maxrate 2000k -bufsize 3000k \
+              -force_key_frames "expr:gte(t,n_forced*5)" -sc_threshold 0 \
+              -c:a aac -b:a 128k -ac 2 \
+              -threads 0 -movflags +faststart \
+              "$FINAL_INPUT"
+          fi
+
           echo "==========================================="
-          
-          # Chạy FFMPEG: 
-          # -c:v copy -> Giữ nguyên định dạng video gốc (không tốn CPU)
-          # -c:a aac -> Encode lại âm thanh để đảm bảo tương thích
-          # -hls_flags independent_segments -> Rất quan trọng khi dùng 'copy' để mỗi segment bắt đầu bằng Keyframe
-          
-          ffmpeg -y -stats_period 30 -i input_video.mp4 \
+          echo "TIẾN HÀNH PHÂN ĐOẠN HLS fMP4"
+          echo "TARGET: $FINAL_INPUT"
+          echo "==========================================="
+
+          # Chạy FFMPEG tạo HLS từ file đã xử lý
+          # Lưu ý: -c:v copy ở đây là an toàn vì FINAL_INPUT chắc chắn là h264
+          ffmpeg -y -stats_period 30 -i "$FINAL_INPUT" \
           -map 0:v:0 -map 0:a? \
           -c:v copy \
           -c:a aac -b:a 96k -ac 2 -ar 48000 \
@@ -136,8 +156,7 @@ jobs:
           -hls_fmp4_init_filename "${SLUG}-index.png" \
           -hls_segment_filename "output/${SLUG}-index%d.png" \
           "output/${SLUG}.m3u8"
-          
-          # Kiểm tra xem file m3u8 có được tạo không
+
           if [ ! -f "output/${SLUG}.m3u8" ]; then
             echo "FFmpeg failed to create m3u8"
             exit 1
