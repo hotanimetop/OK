@@ -80,7 +80,6 @@ jobs:
               MAX_RETRIES=20
       
               while [ "$ATTEMPT" -lt "$MAX_RETRIES" ]; do
-                FULL="$SEG"
       
                 /usr/bin/aria2c \
                   --quiet=true \
