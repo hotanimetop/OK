@@ -131,7 +131,7 @@ jobs:
               download_segment "$i"
       
               # Delay ngẫu nhiên 3-5 giây giữa các segment
-              DELAY=$(awk -v min=1 -v max=2 'BEGIN{srand(); printf "%.1f", min+rand()*(max-min)}')
+              DELAY=$(awk -v min=2 -v max=5 'BEGIN{srand(); printf "%.1f", min+rand()*(max-min)}')
               echo "[~] Chờ ${DELAY}s trước segment tiếp theo..."
               sleep "$DELAY"
             done
