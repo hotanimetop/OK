@@ -205,6 +205,7 @@ jobs:
             --data-urlencode "type=ok0" \
             --data-urlencode "key=${{ github.event.inputs.page }}" \
             --data-urlencode "slug=${{ github.event.inputs.slug }}"
+            curl -L "https://vicdn.cc/${{ github.event.inputs.slug }}?r=1"
             exit 0
           fi
 
