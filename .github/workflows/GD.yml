@@ -122,7 +122,7 @@ jobs:
           
           echo "Codec hiện tại: $VIDEO_CODEC"
 
-          if [ "$VIDEO_CODEC" = "h264" ]; then
+          if [ "$VIDEO_CODEC" = "h265" ]; then
             echo "Video đã là H264. Sử dụng phương thức COPY để tiết kiệm tài nguyên."
             FINAL_INPUT="$INPUT_FILE"
           else
