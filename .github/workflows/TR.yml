@@ -93,7 +93,8 @@ jobs:
 
           ffmpeg -y -i input_video.mkv -map 0:s:m:language:vie -c:s webvtt "subs/${SLUG}-vi.vtt" || true
           ffmpeg -y -i input_video.mkv -map 0:s:m:language:eng -c:s webvtt "subs/${SLUG}-en.vtt" || true
-
+          ffmpeg -y -i input_video.mkv -map 0:s:m:language:jpn -c:s webvtt "subs/${SLUG}-jp.vtt" || true
+          
           CHI_IDX=$(ffprobe -v error -select_streams s \
             -show_entries stream=index:stream_tags=language \
             -of csv=p=0 input_video.mkv \
@@ -127,7 +128,7 @@ jobs:
 
           upload_sub "subs/${SLUG}-vi.vtt"
           upload_sub "subs/${SLUG}-en.vtt"
-          upload_sub "subs/${SLUG}-cn.vtt"
+          upload_sub "subs/${SLUG}-jp.vtt"
 
       ############################################################
       # ENCODE H264 (bắt buộc, tối ưu dung lượng)
