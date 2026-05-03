@@ -152,8 +152,8 @@ jobs:
             -pix_fmt yuv420p \
             -profile:v high \
             -level 4.1 \
-            -crf 23 \
-            -preset medium \
+            -crf 21 \
+            -preset slow \
             -maxrate 2500k \
             -bufsize 3500k \
             -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,unsharp=3:3:0.6:3:3:0.3" \
