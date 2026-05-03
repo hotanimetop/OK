@@ -152,7 +152,7 @@ jobs:
             -pix_fmt yuv420p \
             -profile:v high \
             -level 4.1 \
-            -crf 21 \
+            -crf 23 \
             -preset medium \
             -maxrate 2500k \
             -bufsize 3500k \
