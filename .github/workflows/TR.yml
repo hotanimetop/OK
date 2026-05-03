@@ -153,11 +153,11 @@ jobs:
             -profile:v high \
             -level 4.1 \
             -crf 23 \
-            -preset slow \
+            -preset medium \
             -maxrate 2500k \
             -bufsize 3500k \
-            -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,unsharp=5:5:0.6:3:3:0.3" \
-            -force_key_frames "expr:gte(t,n_forced*5)" \
+            -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,unsharp=3:3:0.6:3:3:0.3" \
+            -force_key_frames "expr:gte(t,n_forced*10)" \
             -sc_threshold 0 \
             -c:a aac \
             -b:a 96k \
