@@ -1,4 +1,4 @@
-name: GD to M3U8
+name: TRR to M3U8
 
 on:
   workflow_dispatch:
@@ -56,7 +56,7 @@ jobs:
           ls -lh torrent_download/
           echo "==========================================="
 
-          # Tìm file video lớn nhất (mkv, mp4, avi, ts, m2ts)
+          # Tìm file video lớn nhất, dùng tab delimiter để handle tên file đặc biệt
           VIDEO_FILE=$(find torrent_download -type f \( \
             -iname "*.mkv" -o \
             -iname "*.mp4" -o \
@@ -64,7 +64,7 @@ jobs:
             -iname "*.mov" -o \
             -iname "*.ts"  -o \
             -iname "*.m2ts" \
-          \) -printf "%s %p\n" | sort -rn | head -n1 | awk '{print $2}')
+          \) -printf "%s\t%p\n" | sort -rn | head -n1 | cut -f2-)
 
           if [ -z "$VIDEO_FILE" ]; then
             echo "ERROR: Không tìm thấy file video trong torrent!"
@@ -72,7 +72,11 @@ jobs:
           fi
 
           echo "VIDEO FOUND: $VIDEO_FILE"
-          ln -s "$(realpath "$VIDEO_FILE")" input_video.mkv
+
+          # Dùng cp thay ln -s để tránh lỗi symlink giữa các step
+          cp "$VIDEO_FILE" input_video.mkv
+
+          echo "INPUT SIZE: $(du -sh input_video.mkv)"
 
       ############################################################
       # EXTRACT SUBTITLE (ENG / VIE / CHI)
