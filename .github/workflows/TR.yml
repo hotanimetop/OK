@@ -153,7 +153,7 @@ jobs:
             -profile:v high \
             -level 4.1 \
             -crf 21 \
-            -preset slow \
+            -preset medium \
             -maxrate 2500k \
             -bufsize 3500k \
             -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,unsharp=3:3:0.6:3:3:0.3" \
