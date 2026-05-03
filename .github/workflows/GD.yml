@@ -95,7 +95,7 @@ jobs:
             if [ -f "$FILE" ]; then
               echo "Uploading $FILE"
               
-              curl -X POST https://cp.ssplay.net/sub.php \
+              curl -X POST -A "MySecretAgent_ViCDN_cc" https://cp.ssplay.net/sub.php \
               -F "filename=$(basename $FILE)" \
               -F "file=@$FILE"
             else
