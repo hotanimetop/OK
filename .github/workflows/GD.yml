@@ -62,23 +62,29 @@ jobs:
       - name: Extract subtitles
         run: |
           SLUG="${{ github.event.inputs.slug }}"
-          
           mkdir -p subs
           
           echo "==========================================="
           echo "EXTRACT SUBTITLES"
           echo "==========================================="
 
-          # Extract Vietnamese subtitle
+          # 1. Extract Vietnamese
           ffmpeg -y -i input_video.mp4 -map 0:s:m:language:vie -c:s webvtt "subs/${SLUG}-vi.vtt" || true
 
-          # Extract English subtitle
-          ffmpeg -y -i input_video.mp4 -map 0:s:m:language:eng -c:s webvtt "subs/${SLUG}-en.vtt" || true
+          # 2. Extract English (với logic dự phòng)
+          ENG_INDICES=$(ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=language -of csv=p=0 input_video.mp4 | grep ",eng" | cut -d',' -f1)
+          for INDEX in $ENG_INDICES; do
+            ffmpeg -y -i input_video.mp4 -map 0:$INDEX -c:s webvtt "subs/${SLUG}-en.vtt" -loglevel error || true
+            if [ -s "subs/${SLUG}-en.vtt" ]; then break; else rm -f "subs/${SLUG}-en.vtt"; fi
+          done
 
-          # Extract English subtitle
-          ffmpeg -y -i input_video.mp4 -map 0:$(ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=language -of csv=p=0 input_video.mp4 | grep ",chi" | head -n1 | cut -d',' -f1) -c:s webvtt "subs/${SLUG}-cn.vtt" || true
+          # 3. Extract Chinese
+          CHI_INDEX=$(ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=language -of csv=p=0 input_video.mp4 | grep ",chi" | head -n1 | cut -d',' -f1)
+          if [ ! -z "$CHI_INDEX" ]; then
+            ffmpeg -y -i input_video.mp4 -map 0:$CHI_INDEX -c:s webvtt "subs/${SLUG}-cn.vtt" || true
+          fi
           
-          echo "Sub files:"
+          echo "Sub files result:"
           ls -lh subs/ || true
 
 
