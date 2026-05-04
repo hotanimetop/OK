@@ -1,10 +1,10 @@
-name: TRR to M3U8 (Smart Encode)
+name: TRR to M3U8 (Smart Fixed)
 
 on:
   workflow_dispatch:
     inputs:
       link:
-        description: 'Link'
+        description: 'Link Nyaa (Dán link /view/ để Encode, link .torrent để Skip)'
         required: true
       slug:
         description: 'Slug'
@@ -32,210 +32,88 @@ jobs:
           sudo apt-get install -y ffmpeg aria2
 
       ############################################################
-      # DOWNLOAD VIA TORRENT
+      # DOWNLOAD & FIX LINK
       ############################################################
       - name: Download via Torrent
         run: |
-          LINK="${{ github.event.inputs.link }}"
-          mkdir -p torrent_download
-
-          echo "==========================================="
-          echo "DOWNLOADING: $LINK"
-          echo "==========================================="
-
-          aria2c \
-            --seed-time=0 \
-            --max-download-limit=0 \
-            --file-allocation=none \
-            --dir=torrent_download \
-            "$LINK"
-
-          # Tìm file video lớn nhất
-          VIDEO_FILE=$(find torrent_download -type f \( \
-            -iname "*.mkv" -o -iname "*.mp4" -o -iname "*.avi" -o \
-            -iname "*.mov" -o -iname "*.ts" -o -iname "*.m2ts" \
-          \) -printf "%s\t%p\n" | sort -rn | head -n1 | cut -f2-)
-
-          if [ -z "$VIDEO_FILE" ]; then
-            echo "ERROR: Không tìm thấy file video!"
-            exit 1
+          RAW_LINK="${{ github.event.inputs.link }}"
+          
+          # Tự động sửa link Nyaa nếu người dùng dán link /view/
+          if [[ "$RAW_LINK" == *"nyaa.si/view/"* ]]; then
+            DOWNLOAD_URL=$(echo "$RAW_LINK" | sed 's|nyaa.si/view/|nyaa.si/download/|' | sed 's|.torrent$||').torrent
+          else
+            DOWNLOAD_URL="$RAW_LINK"
           fi
 
-          cp "$VIDEO_FILE" input_video_raw.mkv
-          echo "DOWNLOAD COMPLETED: $VIDEO_FILE"
+          mkdir -p torrent_download
+          echo "Downloading from: $DOWNLOAD_URL"
+
+          aria2c --seed-time=0 --max-download-limit=0 --user-agent="Mozilla/5.0" \
+                 --file-allocation=none --dir=torrent_download "$DOWNLOAD_URL"
+
+          # Tìm file video lớn nhất
+          VIDEO_PATH=$(find torrent_download -type f \( -iname "*.mkv" -o -iname "*.mp4" -o -iname "*.avi" -o -iname "*.mov" -o -iname "*.ts" -o -iname "*.m2ts" \) -printf "%s\t%p\n" | sort -rn | head -n1 | cut -f2-)
+
+          if [ -z "$VIDEO_PATH" ]; then
+            echo "ERROR: Không tìm thấy video!"; exit 1
+          fi
+
+          # Copy ra file cố định để các bước sau sử dụng
+          cp "$VIDEO_PATH" "input_origin.mkv"
+          echo "File chuẩn bị xử lý: input_origin.mkv"
 
       ############################################################
-      # SMART PROCESSING (ENCODE OR DIRECT USE)
+      # SMART PROCESSING (Logic phân biệt Encode hay không)
       ############################################################
       - name: Process Video
         run: |
           LINK="${{ github.event.inputs.link }}"
-          INPUT="input_video_raw.mkv"
-          OUTPUT="final_source.mp4"
+          INPUT="input_origin.mkv"
+          PROCESSED="ready_to_hls.mp4"
 
-          # KIỂM TRA ĐIỀU KIỆN LINK
+          # Nếu link kết thúc bằng .torrent (dù là link view hay download) thì SKIP ENCODE
           if [[ "$LINK" == *".torrent" ]]; then
-            echo "==========================================="
-            echo "LINK DẠNG .TORRENT -> BỎ QUA ENCODE (COPY STREAM)"
-            echo "==========================================="
-            # Chỉ chuyển container sang MP4 (không render lại) để làm HLS dễ hơn
-            ffmpeg -y -i "$INPUT" -c copy -movflags +faststart "$OUTPUT"
+            echo ">>> CHẾ ĐỘ: KHÔNG ENCODE (COPY STREAM) <<<"
+            ffmpeg -y -i "$INPUT" -c copy -movflags +faststart "$PROCESSED"
           else
-            echo "==========================================="
-            echo "LINK DẠNG VIEW -> BẮT ĐẦU ENCODE H264"
-            echo "==========================================="
+            echo ">>> CHẾ ĐỘ: ENCODE H264 TỐI ƯU <<<"
             ffmpeg -y -stats_period 30 -i "$INPUT" \
               -c:v libx264 -pix_fmt yuv420p -profile:v high -level 4.1 \
               -crf 25 -preset medium -maxrate 2500k -bufsize 3500k \
-              -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" \
+              -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,unsharp=3:3:0.6:3:3:0.3" \
               -c:a aac -b:a 96k -ac 2 -ar 48000 \
-              -movflags +faststart "$OUTPUT"
+              -movflags +faststart "$PROCESSED"
           fi
 
       ############################################################
-      # EXTRACT & UPLOAD SUBTITLES
+      # SUBTITLES & HLS
       ############################################################
-      - name: Handle Subtitles
+      - name: Handle Subtitles and HLS
         run: |
           SLUG="${{ github.event.inputs.slug }}"
-          mkdir -p subs
-          
-          # Trích xuất sub (dùng file raw để đảm bảo còn nguyên stream sub)
-          ffmpeg -y -i input_video_raw.mkv -map 0:s:m:language:eng -c:s webvtt "subs/${SLUG}-en.vtt" || true
-          
-          # Hàm upload
+          mkdir -p output subs
+
+          # 1. Trích xuất Sub từ file gốc
+          ffmpeg -y -i input_origin.mkv -map 0:s:m:language:vie -c:s webvtt "subs/${SLUG}-vi.vtt" || true
+          ffmpeg -y -i input_origin.mkv -map 0:s:m:language:eng -c:s webvtt "subs/${SLUG}-en.vtt" || true
+
+          # 2. Upload Sub
           upload_sub () {
             if [ -f "$1" ]; then
               curl -X POST -A "MySecretAgent_ViCDN_cc" https://vicdn.cc/sub.php -F "filename=$(basename $1)" -F "file=@$1"
             fi
           }
-          upload_sub "subs/${SLUG}-en.vtt"
-
-      ############################################################
-      # CONVERT TO HLS fMP4
-      ############################################################
-      - name: Convert to HLS fMP4
-        run: |
-          mkdir -p output
-          SLUG="${{ github.event.inputs.slug }}"
-          
-          ffmpeg -y -i "final_source.mp4" \
-            -map 0:v:0 -map 0:a? \
-            -c:v copy -c:a copy \
-            -f hls \
-            -start_number 10001 \
-            -hls_time 5 \
-            -hls_list_size 0 \
-            -hls_flags independent_segments \
-            -hls_segment_type fmp4 \
-            -hls_fmp4_init_filename "${SLUG}-index.png" \
-            -hls_segment_filename "output/${SLUG}-index%d.png" \
-            "output/${SLUG}.m3u8"
-
-          ls -lh output/
-
-      ############################################################
-      # UPLOAD SUBTITLE TO SERVER
-      ############################################################
-      - name: Upload subtitles
-        run: |
-          SLUG="${{ github.event.inputs.slug }}"
-
-          upload_sub () {
-            FILE=$1
-            if [ -f "$FILE" ]; then
-              echo "Uploading $FILE"
-              curl -X POST -A "MySecretAgent_ViCDN_cc" https://vicdn.cc/sub.php \
-                -F "filename=$(basename $FILE)" \
-                -F "file=@$FILE"
-            else
-              echo "Subtitle $FILE not found"
-            fi
-          }
-
           upload_sub "subs/${SLUG}-vi.vtt"
           upload_sub "subs/${SLUG}-en.vtt"
-          upload_sub "subs/${SLUG}-jp.vtt"
 
-      ############################################################
-      # ENCODE H264 (bắt buộc, tối ưu dung lượng)
-      ############################################################
-      - name: Encode to H264
-        run: |
-          INPUT_FILE="input_video.mkv"
-          FINAL_INPUT="processed_video.mp4"
-
-          echo "==========================================="
-          echo "THÔNG TIN VIDEO GỐC:"
-          ffprobe -v error \
-            -show_entries stream=codec_name,width,height,bit_rate \
-            -of default=noprint_wrappers=1 "$INPUT_FILE" || true
-          echo "==========================================="
-          echo "BẮT ĐẦU ENCODE H264 (tối ưu dung lượng)..."
-          echo "==========================================="
-
-          ffmpeg -y -stats_period 30 -i "$INPUT_FILE" \
-            -c:v libx264 \
-            -pix_fmt yuv420p \
-            -profile:v high \
-            -level 4.1 \
-            -crf 25 \
-            -preset medium \
-            -maxrate 2500k \
-            -bufsize 3500k \
-            -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,unsharp=3:3:0.6:3:3:0.3" \
-            -force_key_frames "expr:gte(t,n_forced*10)" \
-            -sc_threshold 0 \
-            -c:a aac \
-            -b:a 96k \
-            -ac 2 \
-            -ar 48000 \
-            -threads 0 \
-            -movflags +faststart \
-            "$FINAL_INPUT"
-
-          echo "==========================================="
-          echo "ENCODE HOÀN TẤT"
-          echo "Dung lượng gốc:   $(du -sh "$INPUT_FILE" | cut -f1)"
-          echo "Dung lượng mới:   $(du -sh "$FINAL_INPUT" | cut -f1)"
-          echo "==========================================="
-
-      ############################################################
-      # PHÂN ĐOẠN HLS fMP4
-      ############################################################
-      - name: Convert to HLS fMP4
-        run: |
-          mkdir -p output
-          SLUG="${{ github.event.inputs.slug }}"
-          FINAL_INPUT="processed_video.mp4"
-
-          echo "==========================================="
-          echo "TIẾN HÀNH PHÂN ĐOẠN HLS fMP4"
-          echo "==========================================="
-
-          ffmpeg -y -stats_period 30 -i "$FINAL_INPUT" \
-            -map 0:v:0 -map 0:a? \
-            -c:v copy \
-            -c:a copy \
-            -f hls \
-            -start_number 10001 \
-            -hls_time 5 \
-            -hls_list_size 0 \
-            -hls_flags independent_segments \
-            -hls_segment_type fmp4 \
+          # 3. Phân đoạn HLS từ file đã qua bước Process
+          ffmpeg -y -i "ready_to_hls.mp4" \
+            -map 0:v:0 -map 0:a? -c:v copy -c:a copy -f hls \
+            -start_number 10001 -hls_time 5 -hls_list_size 0 \
+            -hls_flags independent_segments -hls_segment_type fmp4 \
             -hls_fmp4_init_filename "${SLUG}-index.png" \
             -hls_segment_filename "output/${SLUG}-index%d.png" \
             "output/${SLUG}.m3u8"
-
-          if [ ! -f "output/${SLUG}.m3u8" ]; then
-            echo "FFmpeg failed to create m3u8"
-            exit 1
-          fi
-
-          echo "==========================================="
-          echo "CHUYỂN ĐỔI HOÀN TẤT"
-          ls -lh output/
-          echo "==========================================="
 
       ############################################################
       # DEPLOY TO CLOUDFLARE PAGES
