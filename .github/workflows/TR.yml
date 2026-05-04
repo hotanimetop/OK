@@ -1,4 +1,4 @@
-name: TRR to M3U8
+name: TRR to M3U8 (Smart Encode)
 
 on:
   workflow_dispatch:
@@ -37,12 +37,11 @@ jobs:
       - name: Download via Torrent
         run: |
           LINK="${{ github.event.inputs.link }}"
-
-          echo "==========================================="
-          echo "DOWNLOADING TORRENT: $LINK"
-          echo "==========================================="
-
           mkdir -p torrent_download
+
+          echo "==========================================="
+          echo "DOWNLOADING: $LINK"
+          echo "==========================================="
 
           aria2c \
             --seed-time=0 \
@@ -51,61 +50,89 @@ jobs:
             --dir=torrent_download \
             "$LINK"
 
-          echo "==========================================="
-          echo "FILES DOWNLOADED:"
-          ls -lh torrent_download/
-          echo "==========================================="
-
-          # Tìm file video lớn nhất, dùng tab delimiter để handle tên file đặc biệt
+          # Tìm file video lớn nhất
           VIDEO_FILE=$(find torrent_download -type f \( \
-            -iname "*.mkv" -o \
-            -iname "*.mp4" -o \
-            -iname "*.avi" -o \
-            -iname "*.mov" -o \
-            -iname "*.ts"  -o \
-            -iname "*.m2ts" \
+            -iname "*.mkv" -o -iname "*.mp4" -o -iname "*.avi" -o \
+            -iname "*.mov" -o -iname "*.ts" -o -iname "*.m2ts" \
           \) -printf "%s\t%p\n" | sort -rn | head -n1 | cut -f2-)
 
           if [ -z "$VIDEO_FILE" ]; then
-            echo "ERROR: Không tìm thấy file video trong torrent!"
+            echo "ERROR: Không tìm thấy file video!"
             exit 1
           fi
 
-          echo "VIDEO FOUND: $VIDEO_FILE"
-
-          # Dùng cp thay ln -s để tránh lỗi symlink giữa các step
-          cp "$VIDEO_FILE" input_video.mkv
-
-          echo "INPUT SIZE: $(du -sh input_video.mkv)"
+          cp "$VIDEO_FILE" input_video_raw.mkv
+          echo "DOWNLOAD COMPLETED: $VIDEO_FILE"
 
       ############################################################
-      # EXTRACT SUBTITLE (ENG / VIE / CHI)
+      # SMART PROCESSING (ENCODE OR DIRECT USE)
       ############################################################
-      - name: Extract subtitles
+      - name: Process Video
         run: |
-          SLUG="${{ github.event.inputs.slug }}"
+          LINK="${{ github.event.inputs.link }}"
+          INPUT="input_video_raw.mkv"
+          OUTPUT="final_source.mp4"
 
-          mkdir -p subs
-
-          echo "==========================================="
-          echo "EXTRACT SUBTITLES"
-          echo "==========================================="
-
-          ffmpeg -y -i input_video.mkv -map 0:s:m:language:vie -c:s webvtt "subs/${SLUG}-vi.vtt" || true
-          ffmpeg -y -i input_video.mkv -map 0:s:m:language:eng -c:s webvtt "subs/${SLUG}-en.vtt" || true
-          ffmpeg -y -i input_video.mkv -map 0:s:m:language:jpn -c:s webvtt "subs/${SLUG}-jp.vtt" || true
-          
-          CHI_IDX=$(ffprobe -v error -select_streams s \
-            -show_entries stream=index:stream_tags=language \
-            -of csv=p=0 input_video.mkv \
-            | grep ",chi" | head -n1 | cut -d',' -f1)
-
-          if [ -n "$CHI_IDX" ]; then
-            ffmpeg -y -i input_video.mkv -map 0:${CHI_IDX} -c:s webvtt "subs/${SLUG}-cn.vtt" || true
+          # KIỂM TRA ĐIỀU KIỆN LINK
+          if [[ "$LINK" == *".torrent" ]]; then
+            echo "==========================================="
+            echo "LINK DẠNG .TORRENT -> BỎ QUA ENCODE (COPY STREAM)"
+            echo "==========================================="
+            # Chỉ chuyển container sang MP4 (không render lại) để làm HLS dễ hơn
+            ffmpeg -y -i "$INPUT" -c copy -movflags +faststart "$OUTPUT"
+          else
+            echo "==========================================="
+            echo "LINK DẠNG VIEW -> BẮT ĐẦU ENCODE H264"
+            echo "==========================================="
+            ffmpeg -y -stats_period 30 -i "$INPUT" \
+              -c:v libx264 -pix_fmt yuv420p -profile:v high -level 4.1 \
+              -crf 25 -preset medium -maxrate 2500k -bufsize 3500k \
+              -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" \
+              -c:a aac -b:a 96k -ac 2 -ar 48000 \
+              -movflags +faststart "$OUTPUT"
           fi
 
-          echo "Sub files:"
-          ls -lh subs/ || true
+      ############################################################
+      # EXTRACT & UPLOAD SUBTITLES
+      ############################################################
+      - name: Handle Subtitles
+        run: |
+          SLUG="${{ github.event.inputs.slug }}"
+          mkdir -p subs
+          
+          # Trích xuất sub (dùng file raw để đảm bảo còn nguyên stream sub)
+          ffmpeg -y -i input_video_raw.mkv -map 0:s:m:language:eng -c:s webvtt "subs/${SLUG}-en.vtt" || true
+          
+          # Hàm upload
+          upload_sub () {
+            if [ -f "$1" ]; then
+              curl -X POST -A "MySecretAgent_ViCDN_cc" https://vicdn.cc/sub.php -F "filename=$(basename $1)" -F "file=@$1"
+            fi
+          }
+          upload_sub "subs/${SLUG}-en.vtt"
+
+      ############################################################
+      # CONVERT TO HLS fMP4
+      ############################################################
+      - name: Convert to HLS fMP4
+        run: |
+          mkdir -p output
+          SLUG="${{ github.event.inputs.slug }}"
+          
+          ffmpeg -y -i "final_source.mp4" \
+            -map 0:v:0 -map 0:a? \
+            -c:v copy -c:a copy \
+            -f hls \
+            -start_number 10001 \
+            -hls_time 5 \
+            -hls_list_size 0 \
+            -hls_flags independent_segments \
+            -hls_segment_type fmp4 \
+            -hls_fmp4_init_filename "${SLUG}-index.png" \
+            -hls_segment_filename "output/${SLUG}-index%d.png" \
+            "output/${SLUG}.m3u8"
+
+          ls -lh output/
 
       ############################################################
       # UPLOAD SUBTITLE TO SERVER
