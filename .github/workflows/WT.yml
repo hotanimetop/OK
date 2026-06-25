@@ -1,0 +1,284 @@
+name: Webtor to M3U8
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'Link Webtor (vd: https://webtor.io/610bb9d5d5c1e507d8ee9e7a0f9e50c701bd9041.torrent)'
+        required: true
+      slug:
+        description: 'Slug'
+        required: true
+      token:
+        description: 'Token'
+        required: true
+      page:
+        description: 'Pages'
+        required: true
+      account:
+        description: 'Account'
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg aria2
+
+      ############################################################
+      # DOWNLOAD TỪ WEBTOR
+      ############################################################
+      - name: Download via Webtor
+        run: |
+          RAW_LINK="${{ github.event.inputs.link }}"
+
+          # Trích infohash từ link webtor
+          if [[ "$RAW_LINK" =~ ([0-9a-fA-F]{40}) ]]; then
+            INFOHASH="${BASH_REMATCH[1]}"
+          else
+            echo "ERROR: Không tìm thấy infohash hợp lệ trong link!"
+            exit 1
+          fi
+
+          echo "Infohash: $INFOHASH"
+
+          # Bước 1: Thử lấy danh sách file qua API
+          echo "Fetching torrent file list..."
+          TORRENT_INFO=$(curl -s "https://api.webtor.io/v1/torrent/${INFOHASH}" \
+            -H "Accept: application/json" || true)
+
+          echo "Torrent info response: $TORRENT_INFO"
+
+          FILE_PATH=$(echo "$TORRENT_INFO" | python3 -c "
+          import json, sys
+
+          data = json.load(sys.stdin)
+
+          files = []
+          if isinstance(data, list):
+              files = data
+          elif 'files' in data:
+              files = data['files']
+          elif 'content' in data:
+              files = data['content']
+
+          video_exts = ('.mkv', '.mp4', '.avi', '.mov', '.ts', '.m2ts')
+          videos = [f for f in files if isinstance(f, dict) and f.get('name', '').lower().endswith(video_exts)]
+
+          if not videos:
+              print('', end='')
+          else:
+              best = max(videos, key=lambda f: f.get('length', f.get('size', 0)))
+              print(best.get('path', best.get('name', '')), end='')
+          " 2>/dev/null || true)
+
+          # Bước 2: Nếu API không ra, parse file .torrent
+          if [ -z "$FILE_PATH" ]; then
+            echo "Thử parse .torrent file..."
+            curl -sL "https://webtor.io/${INFOHASH}.torrent" -o temp.torrent
+
+            FILE_PATH=$(python3 -c "
+          def decode_bencode(data, idx=0):
+              if data[idx:idx+1] == b'd':
+                  idx += 1
+                  d = {}
+                  while data[idx:idx+1] != b'e':
+                      k, idx = decode_bencode(data, idx)
+                      v, idx = decode_bencode(data, idx)
+                      d[k] = v
+                  return d, idx + 1
+              elif data[idx:idx+1] == b'l':
+                  idx += 1
+                  l = []
+                  while data[idx:idx+1] != b'e':
+                      v, idx = decode_bencode(data, idx)
+                      l.append(v)
+                  return l, idx + 1
+              elif data[idx:idx+1] == b'i':
+                  end = data.index(b'e', idx)
+                  return int(data[idx+1:end]), end + 1
+              else:
+                  colon = data.index(b':', idx)
+                  length = int(data[idx:colon])
+                  start = colon + 1
+                  return data[start:start+length], start + length
+
+          with open('temp.torrent', 'rb') as f:
+              torrent, _ = decode_bencode(f.read())
+
+          info = torrent[b'info']
+          video_exts = (b'.mkv', b'.mp4', b'.avi', b'.mov', b'.ts', b'.m2ts')
+
+          if b'files' in info:
+              name = info[b'name'].decode('utf-8', errors='replace')
+              best = None
+              for fdata in info[b'files']:
+                  fname = fdata[b'path'][-1]
+                  if any(fname.lower().endswith(ext) for ext in video_exts):
+                      if best is None or fdata[b'length'] > best[b'length']:
+                          best = fdata
+              if best:
+                  parts = [p.decode('utf-8', errors='replace') for p in best[b'path']]
+                  print(name + '/' + '/'.join(parts), end='')
+          else:
+              fname = info[b'name']
+              if any(fname.lower().endswith(ext) for ext in video_exts):
+                  print(fname.decode('utf-8', errors='replace'), end='')
+          " 2>/dev/null || true)
+          fi
+
+          if [ -z "$FILE_PATH" ]; then
+            echo "ERROR: Không tìm được file video trong torrent!"
+            exit 1
+          fi
+
+          echo "File video tìm thấy: $FILE_PATH"
+
+          # Bước 3: Tải file
+          FILE_EXT="${FILE_PATH##*.}"
+          echo "FILE_EXT=${FILE_EXT}" >> $GITHUB_ENV
+
+          ENCODED_PATH=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$FILE_PATH")
+          DOWNLOAD_URL="https://api.webtor.io/v1/torrent/${INFOHASH}/download?path=${ENCODED_PATH}"
+
+          echo "Download URL: $DOWNLOAD_URL"
+
+          curl -L "$DOWNLOAD_URL" \
+            -o "input_origin.${FILE_EXT}" \
+            --progress-bar \
+            --retry 3
+
+          cp "input_origin.${FILE_EXT}" "input_origin.mkv"
+          echo "File sẵn sàng xử lý: input_origin.mkv"
+
+      ############################################################
+      # SMART PROCESSING (kiểm tra codec, chỉ encode nếu cần)
+      ############################################################
+      - name: Process Video
+        run: |
+          INPUT="input_origin.mkv"
+          PROCESSED="ready_to_hls.mp4"
+
+          # Kiểm tra codec video
+          CODEC=$(ffprobe -v error -select_streams v:0 \
+            -show_entries stream=codec_name \
+            -of default=noprint_wrappers=1:nokey=1 "$INPUT")
+
+          echo "Codec phát hiện: $CODEC"
+
+          if [[ "$CODEC" == "h264" ]]; then
+            echo ">>> CHẾ ĐỘ: H264 → COPY STREAM (không encode) <<<"
+            ffmpeg -y -i "$INPUT" -c copy -movflags +faststart "$PROCESSED"
+          else
+            echo ">>> CHẾ ĐỘ: $CODEC → ENCODE H264 <<<"
+            ffmpeg -y -stats_period 30 -i "$INPUT" \
+              -c:v libx264 -pix_fmt yuv420p -profile:v high -level 4.1 \
+              -crf 25 -preset medium -maxrate 2500k -bufsize 3500k \
+              -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,unsharp=3:3:0.6:3:3:0.3" \
+              -c:a aac -b:a 96k -ac 2 -ar 48000 \
+              -movflags +faststart "$PROCESSED"
+          fi
+
+      ############################################################
+      # SUBTITLES & HLS
+      ############################################################
+      - name: Handle Subtitles and HLS
+        run: |
+          SLUG="${{ github.event.inputs.slug }}"
+          mkdir -p output subs
+
+          # 1. Trích xuất Sub từ file gốc
+          ffmpeg -y -i input_origin.mkv -map 0:s:m:language:vie -c:s webvtt "subs/${SLUG}-vi.vtt" || true
+          ffmpeg -y -i input_origin.mkv -map 0:s:m:language:eng -c:s webvtt "subs/${SLUG}-en.vtt" || true
+
+          # 2. Upload Sub
+          upload_sub () {
+            if [ -f "$1" ]; then
+              curl -X POST -A "MySecretAgent_ViCDN_cc" https://vicdn.cc/sub.php -F "filename=$(basename $1)" -F "file=@$1"
+            fi
+          }
+          upload_sub "subs/${SLUG}-vi.vtt"
+          upload_sub "subs/${SLUG}-en.vtt"
+
+          # 3. Phân đoạn HLS
+          ffmpeg -y -i "ready_to_hls.mp4" \
+            -map 0:v:0 -map 0:a? -c:v copy -c:a copy -f hls \
+            -start_number 10001 -hls_time 5 -hls_list_size 0 \
+            -hls_flags independent_segments -hls_segment_type fmp4 \
+            -hls_fmp4_init_filename "${SLUG}-index.png" \
+            -hls_segment_filename "output/${SLUG}-index%d.png" \
+            "output/${SLUG}.m3u8"
+
+      ############################################################
+      # DEPLOY TO CLOUDFLARE PAGES
+      ############################################################
+      - name: Deploy to Cloudflare Pages (first)
+        id: deploy1
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.account }}
+          projectName: ${{ github.event.inputs.page }}
+          directory: ./output
+          branch: ${{ github.event.inputs.slug }}
+
+      - name: Verify Cloudflare deployment (branch domain check)
+        id: verify
+        continue-on-error: true
+        env:
+          PROJECT: ${{ github.event.inputs.page }}
+          BRANCH: ${{ github.event.inputs.slug }}
+        run: |
+          set -e
+          FILE_URL="https://${{ github.event.inputs.slug }}.${{ github.event.inputs.page }}.pages.dev/${{ github.event.inputs.slug }}.m3u8"
+
+          echo "[TARGET] $FILE_URL"
+
+          check () {
+            code=$(curl -L -o /dev/null -s -w "%{http_code}" "$FILE_URL")
+            echo "HTTP CODE: $code"
+            [ "$code" = "200" ]
+          }
+
+          echo "[WAIT] Waiting 1 minute for Pages propagation..."
+          sleep 60
+
+          echo "[CHECK #1]"
+          if check; then
+            echo "[SUCCESS] File exists"
+            curl -G "https://cp.ssplay.net/vicdn.php" \
+              --data-urlencode "type=ok0" \
+              --data-urlencode "key=${{ github.event.inputs.page }}" \
+              --data-urlencode "slug=${{ github.event.inputs.slug }}"
+            curl -L -A "MySecretAgent_ViCDN_cc" "https://vicdn.cc/${{ github.event.inputs.slug }}?r=1"
+            exit 0
+          fi
+
+          echo "[WAIT] Still not found, wait extra 3 minutes..."
+          sleep 180
+
+          echo "[CHECK #2]"
+          if check; then
+            echo "[SUCCESS] File exists after delay"
+            exit 0
+          fi
+
+          echo "[FAIL] File still missing → mark for redeploy"
+          echo "NEED_REDEPLOY=true" >> $GITHUB_ENV
+          exit 1
+
+      - name: Deploy to Cloudflare Pages (retry)
+        if: env.NEED_REDEPLOY == 'true'
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.account }}
+          projectName: ${{ github.event.inputs.page }}
+          directory: ./output
+          branch: ${{ github.event.inputs.slug }}
