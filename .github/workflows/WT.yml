@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       link:
-        description: 'Direct download URL (curl-compatible)'
+        description: 'Direct download URL (curl-compatible) hoặc magnet link'
         required: true
       filename:
         description: 'Tên file output (vd: Supergirl.2026.mkv)'
@@ -32,21 +32,57 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg aria2
 
       ############################################################
-      # DOWNLOAD TRỰC TIẾP QUA URL
+      # DOWNLOAD: TỰ ĐỘNG NHẬN BIẾT MAGNET HAY DIRECT URL
       ############################################################
-      - name: Download via Direct URL
+      - name: Download (Magnet via aria2c / Direct via curl)
         run: |
+          set -e
           FILENAME="${{ github.event.inputs.filename }}"
           URL="${{ github.event.inputs.link }}"
 
-          echo "Downloading: $FILENAME"
+          echo "Filename: $FILENAME"
           echo "URL: $URL"
 
-          curl -L -o "$FILENAME" -C - --retry 20 --retry-delay 5 \
-            --retry-connrefused --progress-bar "$URL"
+          mkdir -p downloads
+
+          if [[ "$URL" == magnet:* ]]; then
+            echo ">>> CHẾ ĐỘ: MAGNET LINK → DÙNG ARIA2C <<<"
+
+            aria2c \
+              --dir=downloads \
+              --seed-time=0 \
+              --max-overall-download-limit=0 \
+              --bt-stop-timeout=180 \
+              --bt-tracker-timeout=30 \
+              --bt-max-peers=200 \
+              --max-connection-per-server=16 \
+              --file-allocation=falloc \
+              --summary-interval=30 \
+              --console-log-level=warn \
+              "$URL"
+
+            # Lấy file media lớn nhất tải được (loại trừ các file rác như .txt/.nfo/.jpg)
+            DOWNLOADED_FILE=$(find downloads -type f \
+              \( -iname "*.mkv" -o -iname "*.mp4" -o -iname "*.avi" -o -iname "*.mov" -o -iname "*.ts" -o -iname "*.webm" \) \
+              -printf "%s %p\n" | sort -nr | head -n1 | cut -d' ' -f2-)
+
+            if [ -z "$DOWNLOADED_FILE" ]; then
+              echo "::error::Không tìm thấy file media nào sau khi tải torrent."
+              exit 1
+            fi
+
+            echo "File torrent lớn nhất tìm thấy: $DOWNLOADED_FILE"
+            cp "$DOWNLOADED_FILE" "$FILENAME"
+
+          else
+            echo ">>> CHẾ ĐỘ: DIRECT URL → DÙNG CURL <<<"
+
+            curl -L -o "$FILENAME" -C - --retry 20 --retry-delay 5 \
+              --retry-connrefused --progress-bar "$URL"
+          fi
 
           # Lấy phần mở rộng file
           FILE_EXT="${FILENAME##*.}"
