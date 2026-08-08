@@ -64,6 +64,12 @@ jobs:
           mkdir -p subs
 
           echo "==========================================="
+          echo "LIỆT KÊ TOÀN BỘ SUBTITLE STREAMS TRONG FILE"
+          echo "==========================================="
+          ffmpeg -i input_video.mp4 2>&1 | grep -A 6 "Stream.*Subtitle" || true
+
+          echo ""
+          echo "==========================================="
           echo "EXTRACT SUBTITLES"
           echo "==========================================="
 
@@ -112,7 +118,10 @@ jobs:
           # 4. Korean — ưu tiên bản chuẩn, loại trừ SDH/CC
           extract_lang "kor" "subs/${SLUG}-kr.vtt" "SDH|CC" || true
 
-          echo "Sub files result:"
+          echo ""
+          echo "==========================================="
+          echo "SUB FILES RESULT"
+          echo "==========================================="
           ls -lh subs/ || true
 
 
