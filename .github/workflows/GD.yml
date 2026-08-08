@@ -154,7 +154,8 @@ jobs:
             # Vẫn upload en/cn nếu có
             upload_sub "$EN_FILE"
             upload_sub "$CN_FILE"
-
+            upload_sub "$KR_FILE"
+            
             # Kiểm tra có ít nhất 1 sub để dịch không
             if [ -f "$EN_FILE" ] || [ -f "$KR_FILE" ] || [ -f "$CN_FILE" ]; then
               echo "🔁 Gọi API dịch sub cho slug: $SLUG"
