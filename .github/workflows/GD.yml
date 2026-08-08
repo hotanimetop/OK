@@ -67,12 +67,28 @@ jobs:
           echo "EXTRACT SUBTITLES"
           echo "==========================================="
 
+          # Hàm extract theo ngôn ngữ, có thể loại trừ stream theo pattern trong title (vd: SDH)
           extract_lang () {
             LANG_CODE=$1
             OUT_FILE=$2
-            INDICES=$(ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=language -of csv=p=0 input_video.mp4 | grep ",${LANG_CODE}" | cut -d',' -f1)
+            EXCLUDE_PATTERN=$3   # optional, ví dụ "SDH|CC"
 
-            for INDEX in $INDICES; do
+            # Lấy index + title của các stream đúng ngôn ngữ
+            STREAMS=$(ffprobe -v error -select_streams s \
+              -show_entries stream=index:stream_tags=language,title \
+              -of csv=p=0 input_video.mp4 | grep ",${LANG_CODE},")
+
+            # Nếu có EXCLUDE_PATTERN, ưu tiên stream KHÔNG khớp pattern trước
+            if [ -n "$EXCLUDE_PATTERN" ]; then
+              PRIORITY_INDICES=$(echo "$STREAMS" | grep -viE "$EXCLUDE_PATTERN" | cut -d',' -f1)
+              FALLBACK_INDICES=$(echo "$STREAMS" | grep -iE "$EXCLUDE_PATTERN" | cut -d',' -f1)
+              ALL_INDICES="$PRIORITY_INDICES $FALLBACK_INDICES"
+            else
+              ALL_INDICES=$(echo "$STREAMS" | cut -d',' -f1)
+            fi
+
+            for INDEX in $ALL_INDICES; do
+              [ -z "$INDEX" ] && continue
               ffmpeg -y -i input_video.mp4 -map 0:$INDEX -c:s webvtt "$OUT_FILE" -loglevel error || true
               if [ -s "$OUT_FILE" ]; then
                 echo "✅ [$LANG_CODE] OK tại stream index $INDEX -> $OUT_FILE"
@@ -87,7 +103,7 @@ jobs:
             return 1
           }
 
-          # 1. Vietnamese — loop qua từng stream vie đến khi ra file có nội dung
+          # 1. Vietnamese
           extract_lang "vie" "subs/${SLUG}-vi.vtt"
 
           # 2. English
@@ -95,6 +111,9 @@ jobs:
 
           # 3. Chinese
           extract_lang "chi" "subs/${SLUG}-cn.vtt"
+
+          # 4. Korean — ưu tiên bản chuẩn, loại trừ SDH/CC
+          extract_lang "kor" "subs/${SLUG}-kr.vtt" "SDH|CC"
 
           echo "Sub files result:"
           ls -lh subs/ || true
