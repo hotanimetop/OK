@@ -67,18 +67,15 @@ jobs:
           echo "EXTRACT SUBTITLES"
           echo "==========================================="
 
-          # Hàm extract theo ngôn ngữ, có thể loại trừ stream theo pattern trong title (vd: SDH)
           extract_lang () {
             LANG_CODE=$1
             OUT_FILE=$2
-            EXCLUDE_PATTERN=$3   # optional, ví dụ "SDH|CC"
+            EXCLUDE_PATTERN=$3
 
-            # Lấy index + title của các stream đúng ngôn ngữ
             STREAMS=$(ffprobe -v error -select_streams s \
               -show_entries stream=index:stream_tags=language,title \
-              -of csv=p=0 input_video.mp4 | grep ",${LANG_CODE},")
+              -of csv=p=0 input_video.mp4 | grep ",${LANG_CODE}," || true)
 
-            # Nếu có EXCLUDE_PATTERN, ưu tiên stream KHÔNG khớp pattern trước
             if [ -n "$EXCLUDE_PATTERN" ]; then
               PRIORITY_INDICES=$(echo "$STREAMS" | grep -viE "$EXCLUDE_PATTERN" | cut -d',' -f1)
               FALLBACK_INDICES=$(echo "$STREAMS" | grep -iE "$EXCLUDE_PATTERN" | cut -d',' -f1)
@@ -104,16 +101,16 @@ jobs:
           }
 
           # 1. Vietnamese
-          extract_lang "vie" "subs/${SLUG}-vi.vtt"
+          extract_lang "vie" "subs/${SLUG}-vi.vtt" || true
 
           # 2. English
-          extract_lang "eng" "subs/${SLUG}-en.vtt"
+          extract_lang "eng" "subs/${SLUG}-en.vtt" || true
 
           # 3. Chinese
-          extract_lang "chi" "subs/${SLUG}-cn.vtt"
+          extract_lang "chi" "subs/${SLUG}-cn.vtt" || true
 
           # 4. Korean — ưu tiên bản chuẩn, loại trừ SDH/CC
-          extract_lang "kor" "subs/${SLUG}-kr.vtt" "SDH|CC"
+          extract_lang "kor" "subs/${SLUG}-kr.vtt" "SDH|CC" || true
 
           echo "Sub files result:"
           ls -lh subs/ || true
