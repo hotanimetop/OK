@@ -140,12 +140,14 @@ jobs:
           VI_FILE="subs/${SLUG}-vi.vtt"
           EN_FILE="subs/${SLUG}-en.vtt"
           CN_FILE="subs/${SLUG}-cn.vtt"
+          KR_FILE="subs/${SLUG}-kr.vtt"
 
           if [ -f "$VI_FILE" ]; then
             echo "✅ Có vi.vtt → upload bình thường"
             upload_sub "$VI_FILE"
             upload_sub "$EN_FILE"
             upload_sub "$CN_FILE"
+            upload_sub "$KR_FILE"
           else
             echo "⚠️ Không có vi.vtt"
 
@@ -154,7 +156,7 @@ jobs:
             upload_sub "$CN_FILE"
 
             # Kiểm tra có ít nhất 1 sub để dịch không
-            if [ -f "$EN_FILE" ] || [ -f "$CN_FILE" ]; then
+            if [ -f "$EN_FILE" ] || [ -f "$KR_FILE" ] || [ -f "$CN_FILE" ]; then
               echo "🔁 Gọi API dịch sub cho slug: $SLUG"
               curl -s "https://cp.ssplay.net/sub.php?hash=${SLUG}"
             else
