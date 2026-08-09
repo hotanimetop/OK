@@ -80,7 +80,8 @@ jobs:
 
             STREAMS=$(ffprobe -v error -select_streams s \
               -show_entries stream=index:stream_tags=language,title \
-              -of csv=p=0 input_video.mp4 | grep ",${LANG_CODE}," || true)
+              -of csv=p=0 input_video.mp4 | \
+              awk -F',' -v lang="$LANG_CODE" '$2 == lang {print}')
 
             if [ -n "$EXCLUDE_PATTERN" ]; then
               PRIORITY_INDICES=$(echo "$STREAMS" | grep -viE "$EXCLUDE_PATTERN" | cut -d',' -f1)
