@@ -52,7 +52,7 @@ jobs:
           else
             echo "Using curl"
       
-            curl -L "$LINK" -o input_video.mp4
+            curl -g -L "$LINK" -o input_video.mp4
           fi
 
       ############################################################
