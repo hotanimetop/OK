@@ -1,4 +1,4 @@
-name: GD to M3U8
+name: GD to M3U8 Fix
 
 on:
   workflow_dispatch:
