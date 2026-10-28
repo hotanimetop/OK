@@ -208,41 +208,23 @@ jobs:
         env:
           VIDEO_URL: ${{ inputs.link }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           BILIBILI_URL="$VIDEO_URL"
-          UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
-
-          COMMON=(
-            --cookies work/cookies.txt --no-playlist
-            --extractor-retries 3 --fragment-retries 3 --retries 2 --socket-timeout 30
-            --add-header "User-Agent: $UA"
-            --add-header "Referer: https://www.bilibili.com/"
-            --add-header "Origin: https://www.bilibili.com"
-            -f "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b"
-            -S "res,codec:avc1:h264,ext:mp4:m4a"
-            --merge-output-format mp4
-            -o "raw_video.mp4"
-          )
-
-          ok=0
-          for attempt in 1 2 3 4 5 6; do
-            # Lần lẻ: aria2c (ít kết nối). Lần chẵn: bộ tải gốc của yt-dlp.
-            # Mỗi lần chạy lại yt-dlp sẽ lấy link mới, có thể trúng mirror CDN khác.
-            if [ $((attempt % 2)) -eq 1 ]; then
-              echo "=== attempt $attempt: aria2c ==="
-              DL=(--downloader aria2c --downloader-args "aria2c:-x 4 -s 4 -k 1M --min-split-size=5M --max-tries=2 --retry-wait=3")
-            else
-              echo "=== attempt $attempt: native ==="
-              DL=()
-            fi
-            if yt-dlp "${COMMON[@]}" "${DL[@]}" "$BILIBILI_URL"; then
-              ok=1; break
-            fi
-            sleep $((attempt * 8))
-          done
-
-          if [ "$ok" -ne 1 ] || [ ! -f raw_video.mp4 ]; then
-            echo "::error::Khong tai duoc video Bilibili (CDN tu choi IP runner)."
+          yt-dlp --cookies work/cookies.txt --no-playlist \
+            --extractor-retries 5 --fragment-retries 5 --retries 5 --socket-timeout 30 \
+            --add-header "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" \
+            --add-header "Referer: https://www.bilibili.com/" \
+            --add-header "Origin: https://www.bilibili.com" \
+            --downloader aria2c \
+            --downloader-args "aria2c:-x 16 -s 16 -k 1M --max-connection-per-server=16 --min-split-size=1M" \
+            --concurrent-fragments 16 \
+            -f "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b" \
+            -S "res,codec:avc1:h264,ext:mp4:m4a" \
+            --merge-output-format mp4 \
+            -o "raw_video.mp4" \
+            "$BILIBILI_URL"
+          if [ ! -f raw_video.mp4 ]; then
+            echo "::error::raw_video.mp4 khong ton tai."
             find . -maxdepth 2 -type f -ls
             exit 1
           fi
