@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       # ---------- SOURCE ----------
-      url:
+      link:
         description: "https://www.bilibili.com/video/BV1YZJb6RELN"
         required: true
         type: string
@@ -49,7 +49,7 @@ jobs:
 
       - name: Validate Bilibili URL
         env:
-          VIDEO_URL: ${{ inputs.url }}
+          VIDEO_URL: ${{ inputs.link }}
         run: |
           [[ "$VIDEO_URL" =~ ^https?://([[:alnum:]-]+\.)?bilibili\.com/video/BV[0-9A-Za-z]+ ]] || { echo '::error::url must be a Bilibili video URL'; exit 1; }
       - name: Setup Python
@@ -206,7 +206,7 @@ jobs:
           PY
       - name: Download Bilibili video
         env:
-          VIDEO_URL: ${{ inputs.url }}
+          VIDEO_URL: ${{ inputs.link }}
         run: |
           set -uo pipefail
           BILIBILI_URL="$VIDEO_URL"
