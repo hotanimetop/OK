@@ -39,7 +39,7 @@ jobs:
       LANG: "C.UTF-8"
       # Muốn render nhanh hơn: đổi X264_PRESET thành veryfast / faster (file to hơn một chút)
       X264_PRESET: "medium"
-      X264_CRF: "25"
+      X264_CRF: "23"
 
     steps:
       - name: Checkout repository
