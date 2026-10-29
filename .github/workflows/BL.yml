@@ -1279,7 +1279,7 @@ jobs:
           TTS_SPEEDUP: "1.0"           # tăng tốc thêm bằng ffmpeg atempo sau khi nhận mp3 (1.0 = giữ nguyên)
           TTS_WORKERS: "4"             # số request song song tới API (giảm xuống 1-2 nếu bị 429)
           TTS_MAX_RETRIES: "3"         # thử lại khi API trả 429/5xx hoặc lỗi mạng
-          TTS_ERROR_THRESHOLD: "5"     # quá số đoạn lỗi này thì dừng workflow
+          TTS_ERROR_THRESHOLD: "20"     # quá số đoạn lỗi này thì dừng workflow
         run: |
           python3 <<'PY'
           import os, re, sys, time, base64, subprocess, logging
