@@ -207,13 +207,15 @@ jobs:
       - name: Download Bilibili video
         env:
           VIDEO_URL: ${{ inputs.link }}
+          MAX_ATTEMPTS: "5"
         run: |
           set -uo pipefail
           BILIBILI_URL="$VIDEO_URL"
           UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
           COMMON=(
             --cookies work/cookies.txt --no-playlist
-            --extractor-retries 3 --fragment-retries 3 --retries 2 --socket-timeout 30
+            --continue --no-overwrites
+            --extractor-retries 3 --fragment-retries 5 --retries 3 --socket-timeout 30
             --add-header "User-Agent: $UA"
             --add-header "Referer: https://www.bilibili.com/"
             --add-header "Origin: https://www.bilibili.com"
@@ -222,25 +224,61 @@ jobs:
             --merge-output-format mp4
             -o "raw_video.mp4"
           )
+
+          show_status() {
+            echo "--- Trạng thái file đã tải ---"
+            ls -lh raw_video* 2>/dev/null || echo "(chưa có file nào)"
+            echo "------------------------------"
+          }
+
+          # Kiểm tra file cuối có hợp lệ không (không bị cụt / hỏng)
+          valid_video() {
+            [ -s raw_video.mp4 ] || return 1
+            d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 raw_video.mp4 2>/dev/null)
+            [ -n "$d" ] && [ "$d" != "N/A" ]
+          }
+
+          # Chỉ xóa phần DANG TẢI DỞ (.part/.aria2/.ytdl). File đã tải xong hoàn chỉnh được GIỮ NGUYÊN.
+          drop_partials() {
+            find . -maxdepth 1 \( -name 'raw_video*.part' -o -name 'raw_video*.aria2' -o -name 'raw_video*.ytdl' \) -delete
+          }
+
           ok=0
-          for attempt in 1 2 3 4 5 6; do
-            # Lần lẻ: aria2c (ít kết nối). Lần chẵn: bộ tải gốc của yt-dlp.
-            # Mỗi lần chạy lại yt-dlp sẽ lấy link mới, có thể trúng mirror CDN khác.
-            if [ $((attempt % 2)) -eq 1 ]; then
-              echo "=== attempt $attempt: aria2c ==="
-              DL=(--downloader aria2c --downloader-args "aria2c:-x 4 -s 4 -k 1M --min-split-size=5M --max-tries=2 --retry-wait=3")
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            # Lần 1-3: aria2c (ít kết nối). Lần 4-5: bộ tải gốc của yt-dlp.
+            # Khi đổi bộ tải phải bỏ phần tải dở, vì aria2c cấp phát sẵn dung lượng file
+            # nên bộ tải gốc không thể resume an toàn (sẽ hỏng file).
+            if [ "$attempt" -le 3 ]; then
+              echo "=== attempt $attempt/$MAX_ATTEMPTS: aria2c (resume) ==="
+              DL=(--downloader aria2c --downloader-args "aria2c:-x 4 -s 4 -k 1M --min-split-size=5M --max-tries=3 --retry-wait=3 --continue=true --auto-file-renaming=false --allow-overwrite=true")
             else
-              echo "=== attempt $attempt: native ==="
+              if [ "$attempt" -eq 4 ]; then
+                echo "Đổi sang bộ tải gốc: bỏ phần tải dở của aria2c, giữ file đã hoàn chỉnh."
+                drop_partials
+              fi
+              echo "=== attempt $attempt/$MAX_ATTEMPTS: native (resume) ==="
               DL=()
             fi
+
+            show_status
+
+            # yt-dlp tự bỏ qua stream (video/audio) đã tải xong và chỉ tải tiếp phần còn thiếu.
+            # Mỗi lần chạy lại sẽ lấy link mới (có thể trúng mirror CDN khác).
             if yt-dlp "${COMMON[@]}" "${DL[@]}" "$BILIBILI_URL"; then
-              ok=1; break
+              if valid_video; then
+                ok=1; break
+              fi
+              echo "::warning::File ghép xong nhưng không hợp lệ, xóa file ghép và thử lại."
+              rm -f raw_video.mp4
             fi
-            sleep $((attempt * 8))
+
+            echo "::warning::Attempt $attempt thất bại, giữ lại phần đã tải để tải tiếp."
+            [ "$attempt" -lt "$MAX_ATTEMPTS" ] && sleep $((attempt * 8))
           done
-          if [ "$ok" -ne 1 ] || [ ! -f raw_video.mp4 ]; then
-            echo "::error::Khong tai duoc video Bilibili (CDN tu choi IP runner)."
-            find . -maxdepth 2 -type f -ls
+
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::Khong tai duoc video Bilibili sau $MAX_ATTEMPTS lan thu (CDN tu choi IP runner)."
+            show_status
             exit 1
           fi
           ls -lh raw_video.mp4
