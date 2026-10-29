@@ -1462,7 +1462,7 @@ jobs:
           TTS_COMP_MAKEUP = 2.0      # bù âm lượng sau bộ nén (2.0 ≈ +6dB)
           TTS_VOLUME = 1.0           # nhân thêm âm lượng cuối (1.0 = giữ nguyên)
           # ---- Mix / tốc độ ----
-          BG_RATIO = 0.5             # tiếng gốc khi CÓ thoại = 50% độ to TTS (muốn nhỏ hơn: 0.3, to hơn: 0.7)
+          BG_RATIO = 0.3             # tiếng gốc khi CÓ thoại = 50% độ to TTS (muốn nhỏ hơn: 0.3, to hơn: 0.7)
           BG_OUT = 1.0               # tiếng gốc khi KHÔNG có thoại (1.0 = giữ nguyên mức đã chuẩn hóa)
           BG_IN = BG_RATIO           # (envelope tối đa 1.0; phần khuếch đại nằm ở BG_GAIN bên dưới)
           BG_GAIN_MAX = 4.0          # giới hạn khuếch đại tối đa cho tiếng gốc
