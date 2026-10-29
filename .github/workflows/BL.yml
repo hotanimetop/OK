@@ -1670,8 +1670,8 @@ jobs:
           vi = pysubs2.load("work/vietnamese.srt", encoding="utf-8")
           max_chars = max((len(re.sub(r"\s+", "", ev.text)) for ev in vi.events), default=20)
           FONT_SCALE = 1.25
-          font_size = max(40, int(sub_h * .90 * FONT_SCALE))
-          font_size = min(font_size, max(40, int(width * .80 / max(1, max_chars * .50))))
+          font_size = max(45, int(sub_h * .90 * FONT_SCALE))
+          font_size = min(font_size, max(45, int(width * .80 / max(1, max_chars * .50))))
           ass = [
               "[Script Info]", "Title: Vietnamese hard subtitles",
               "ScriptType: v4.00+", f"PlayResX: {width}", f"PlayResY: {height}",
