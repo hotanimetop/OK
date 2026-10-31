@@ -207,7 +207,7 @@ jobs:
       - name: Download Bilibili video
         env:
           VIDEO_URL: ${{ inputs.link }}
-          MAX_ATTEMPTS: "10"
+          MAX_ATTEMPTS: "40"
         run: |
           set -uo pipefail
           BILIBILI_URL="$VIDEO_URL"
@@ -248,11 +248,11 @@ jobs:
             # Lần 1-3: aria2c (ít kết nối). Lần 4-5: bộ tải gốc của yt-dlp.
             # Khi đổi bộ tải phải bỏ phần tải dở, vì aria2c cấp phát sẵn dung lượng file
             # nên bộ tải gốc không thể resume an toàn (sẽ hỏng file).
-            if [ "$attempt" -le 3 ]; then
+            if [ "$attempt" -le 20 ]; then
               echo "=== attempt $attempt/$MAX_ATTEMPTS: aria2c (resume) ==="
               DL=(--downloader aria2c --downloader-args "aria2c:-x 4 -s 4 -k 1M --min-split-size=5M --max-tries=3 --retry-wait=3 --continue=true --auto-file-renaming=false --allow-overwrite=true")
             else
-              if [ "$attempt" -eq 4 ]; then
+              if [ "$attempt" -eq 21 ]; then
                 echo "Đổi sang bộ tải gốc: bỏ phần tải dở của aria2c, giữ file đã hoàn chỉnh."
                 drop_partials
               fi
