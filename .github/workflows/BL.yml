@@ -1304,14 +1304,30 @@ jobs:
               "x-api-key": API_KEY,
               "x-revidapi-client": "tts-studio",
           }
+          import unicodedata
           def normalize_for_tts(text):
+              text = unicodedata.normalize("NFKC", text)   # full-width -> ASCII, … -> ...
+              text = re.sub(r"\{[^}]*\}", " ", text)        # tag ASS
+              text = re.sub(r"<[^>]+>", " ", text)          # tag HTML
+              text = text.replace("\\N", " ").replace("\\n", " ")
+              # bỏ chữ Hán / ký tự CJK và dấu câu CJK còn sót
+              text = re.sub(r"[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff]", " ", text)
+              text = re.sub(r"[‘’´`]", "'", text)
+              text = re.sub(r"[–—―]", "-", text)
               text = text.lower()
-              text = re.sub(r'<[^>]+>', '', text)
-              text = re.sub(r'\b([a-zà-ỹđ])-\1', r'\1', text)
-              text = re.sub(r'\s+', ' ', text).strip()
-              text = text.replace('"', '').replace('[', '').replace(']', '')
-              text = text.replace(",", ", ").replace(".", ". ")
-              if not text.endswith((".", "!", "?", "...")): text += "."
+              text = re.sub(r"\b([a-zà-ỹđ])-\1", r"\1", text)
+              # chỉ giữ chữ, số, khoảng trắng và vài dấu câu cơ bản
+              text = re.sub(r"[^\w\s,.!?;:'%-]|_", " ", text)
+              text = re.sub(r"\.{2,}", ".", text)            # ... -> .
+              text = re.sub(r"([,;:!?])\1+", r"\1", text)    # !!! -> !
+              text = re.sub(r"\s+([,.;:!?])", r"\1", text)   # bỏ khoảng trắng trước dấu
+              text = re.sub(r"([,;:!?])(?=\S)", r"\1 ", text)
+              text = re.sub(r"\.(?=[^\W\d_])", ". ", text)   # chỉ thêm cách sau '.' khi kế tiếp là chữ, giữ nguyên 3.5
+              text = re.sub(r"\s+", " ", text).strip(" ,.;:-'")
+              if not re.search(r"\w", text):                 # chỉ còn ký tự rác -> bỏ cue
+                  return ""
+              if not text.endswith((".", "!", "?")):
+                  text += "."
               return text
           def n_words(text):
               return len(re.findall(r"\w+", text, re.UNICODE))
