@@ -207,7 +207,7 @@ jobs:
       - name: Download Bilibili video
         env:
           VIDEO_URL: ${{ inputs.link }}
-          MAX_ATTEMPTS: "5"
+          MAX_ATTEMPTS: "10"
         run: |
           set -uo pipefail
           BILIBILI_URL="$VIDEO_URL"
