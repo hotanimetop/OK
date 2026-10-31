@@ -1279,7 +1279,7 @@ jobs:
           TTS_SPEEDUP: "1.0"           # tăng tốc thêm bằng ffmpeg atempo sau khi nhận mp3 (1.0 = giữ nguyên)
           TTS_WORKERS: "4"             # số request song song tới API (giảm xuống 1-2 nếu bị 429)
           TTS_MAX_RETRIES: "3"         # thử lại khi API trả 429/5xx hoặc lỗi mạng
-          TTS_ERROR_THRESHOLD: "20"     # quá số đoạn lỗi này thì dừng workflow
+          TTS_ERROR_RATIO: "0.1"     # quá số đoạn lỗi này thì dừng workflow
         run: |
           python3 <<'PY'
           import os, re, sys, time, base64, subprocess, logging
@@ -1297,7 +1297,7 @@ jobs:
           TTS_SPEEDUP = float(os.environ.get("TTS_SPEEDUP", "1.0"))
           WORKERS = max(1, int(os.environ.get("TTS_WORKERS", "4")))
           MAX_RETRIES = max(1, int(os.environ.get("TTS_MAX_RETRIES", "3")))
-          ERROR_THRESHOLD = int(os.environ.get("TTS_ERROR_THRESHOLD", "5"))
+          ERROR_RATIO = float(os.environ.get("TTS_ERROR_RATIO", "0.1"))
           HEADERS = {
               "Content-Type": "application/json",
               "Accept": "application/json",
@@ -1413,6 +1413,8 @@ jobs:
                       # cue rỗng: không tạo file, bước mix sẽ coi là im lặng
                       continue
                   jobs.append((i, text))
+              ERROR_THRESHOLD = max(1, int(len(jobs) * ERROR_RATIO))
+              print(f"[Revid] Dừng nếu lỗi >= {ERROR_THRESHOLD}/{len(jobs)} đoạn", flush=True)
               failed = []   # (index, text)
               made = 0
               done = 0
